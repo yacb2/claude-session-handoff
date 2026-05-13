@@ -3,7 +3,8 @@ name: session-handoff
 description: Hand off the current Claude Code session to a fresh new one with the current context seeded as a handoff prompt. Use when the user wants to keep working in a clean session without losing the plan — faster and cheaper than /compact since it opens a new process with hooks, skills, MCP, and the Claude Code binary reloaded.
 when_to_use: |
   Use when the user asks to hand off the session, start a fresh session that keeps the current context, restart while preserving what we're working on, or continue with the next phase of a plan in a clean session. Also suggest proactively when the user runs /compact on a long conversation, wants to reload hooks/skills/MCP servers mid-session, or hits compaction errors.
-  Do NOT use for /clear or wiping the conversation, for short conversations where /compact is enough, for restarting unrelated things like the dev server or docker, for delegating a task to a subagent, or for questions about what /compact or /clear actually do.
+  When the user drops idiomatic signals that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over", "let's wrap this up and continue in a new chat" — do not execute the handoff directly. Propose it, summarize what would be seeded, and confirm before running.
+  Do NOT use for /clear or wiping the conversation, for short conversations where /compact is enough, for restarting unrelated things like the dev server or docker, or for questions about what /compact or /clear actually do.
 ---
 
 # Session Handoff
@@ -12,18 +13,15 @@ This skill closes the current Claude Code session and opens a new one with a han
 
 ## When to use this skill
 
-**Direct trigger** — the user explicitly asks for a handoff:
-- "do a handoff" / "hand off" / "hand off this session"
-- "haz handoff" / "haz un handoff" / "inicia sesión nueva con contexto"
-- "start a new session with context" / "restart preserving context"
-- "transfiere el contexto" / "sigamos en limpio" / "estamos largos, sesión nueva"
-- "reinicia preservando contexto"
+**Direct trigger — execute immediately.** The user explicitly asks for a handoff: hand off this session, start a new session keeping context, restart preserving context, give me a prompt to continue in a new session, next phase of the plan in a clean session. Claude handles the user's intent across any language they write in; no need to enumerate translations.
 
-**Proactive trigger** — suggest `/handoff` (or this skill) instead of `/compact` when:
-- The user runs or mentions `/compact` and the conversation is large (>50% context used).
+**Proactive trigger — suggest, then execute on confirmation.** Recommend a handoff (and ask before running it) when:
+- The user runs or mentions `/compact` and the conversation is already large.
 - Compaction errors appear in long sessions.
 - The user wants to reload hooks, skills, MCP servers, or pick up a new Claude Code binary version.
-- The user says "start fresh but don't lose the plan" / "empezar de cero pero sin perder el plan".
+- The user says something like "start fresh but don't lose the plan".
+
+**Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over", "let's wrap this up and continue in a new chat" — do not call the handoff bash directly. Reply with a one-line proposal that names what would be seeded (current goal + open thread) and ask if they want it triggered. Only execute after they confirm.
 
 **Do NOT use** when:
 - The user only wants `/clear` (no context preserved).
