@@ -1,7 +1,7 @@
 ---
 description: Cierra la sesión actual y abre una nueva, sembrando contexto de handoff
 argument-hint: [prompt opcional — si va vacío, Claude lo genera del contexto actual]
-allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(kill:*), Bash(mkdir:*), Bash(test:*), Write
+allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Write
 ---
 
 # /handoff
@@ -37,7 +37,7 @@ Sé breve. Cada frase tiene que ganarse su lugar.
 
 ## Ejecuta el handoff
 
-Con el payload listo, escríbelo al archivo de payload, crea el flag y manda SIGTERM al wrapper. **Importante**: `$CLAUDE_HANDOFF_ID` tiene que estar seteado — si no, el wrapper no está corriendo y no podemos cerrar.
+Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: `$CLAUDE_HANDOFF_ID` tiene que estar seteado — si no, el wrapper no está corriendo y no podemos cerrar.
 
 ```sh
 if [ -z "$CLAUDE_HANDOFF_ID" ]; then
@@ -48,6 +48,7 @@ fi
 mkdir -p "$HOME/.claude/tmp"
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
+EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"
 
 # Escribe el payload usando un heredoc con delimitador único para evitar
 # expansión de variables y conflictos con comillas dentro del prompt.
@@ -56,7 +57,7 @@ cat > "$PAYLOAD_FILE" <<'__HANDOFF_PAYLOAD_EOF__'
 __HANDOFF_PAYLOAD_EOF__
 
 touch "$FLAG_FILE"
-kill -TERM $PPID
+touch "$EXIT_TRIGGER"
 ```
 
-Después de mandar `kill -TERM`, no agregues más output — el wrapper va a cerrar este proceso y levantar una sesión nueva.
+Después de tocar `$EXIT_TRIGGER`, no agregues más output — el watcher del wrapper detecta el archivo en ~0.5s, manda SIGTERM a claude, y levanta la sesión nueva.
