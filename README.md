@@ -41,8 +41,6 @@ shows a systemMessage banner, deletes the payload (one-shot)
 New session opens with the handoff context loaded.
 ```
 
-For the full flow including the slash command and skill paths, see [`.context/references/architecture/00-index.md`](.context/references/architecture/00-index.md) (private to the repo; included here as a pointer).
-
 ## Three ways to trigger a handoff
 
 ### 1. `handoff: <text>` (zero tokens, you write the prompt)
@@ -69,13 +67,14 @@ With no args, Claude generates the handoff prompt from the conversation context.
 
 ```
 > do a handoff
-> haz un handoff
-> dame un prompt para iniciar una nueva sesión con este contexto
-> start a new session for the next phase of the plan
-> sigamos en limpio
+> start a new session keeping this context
+> let's wrap this up and continue in a clean session
+> next phase of the plan in a new session
 ```
 
-The skill activates, drafts the structured prompt, and runs the handoff. It also suggests handoff proactively when it sees you typing `/compact` on a large conversation.
+The skill activates, drafts the structured prompt, and runs the handoff. It also suggests handoff proactively when it sees you typing `/compact` on a large conversation, or drops idiomatic cues like "this chat is getting unwieldy" or "we need a fresh start" — in those cases it asks before executing.
+
+The skill works across any language Claude understands; the description is in English but you can ask in Spanish, Portuguese, French, etc.
 
 ### 4. `handoff` alone (no text)
 
@@ -94,7 +93,7 @@ Fresh session, **no seeded context**. The wrapper prints an explicit warning bef
 ## Install
 
 ```bash
-git clone https://github.com/<your-user>/claude-session-handoff.git
+git clone https://github.com/yacb2/claude-session-handoff.git
 cd claude-session-handoff
 ./install.sh
 ```
@@ -131,7 +130,7 @@ If you upgrade an old `claude-restart` installation, the new shared block will b
 | `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>`, emits both `additionalContext` (for Claude) and `systemMessage` (banner for you), deletes the payload. |
 | `scripts/handoff-prompt-hook.sh` | UserPromptSubmit hook: intercepts `handoff` / `handoff: <text>` and triggers a handoff without going through the model. |
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
-| `skills/session-handoff/SKILL.md` | Skill with natural-language triggers (English, Spanish, Portuguese, French) and a structured prompt template. |
+| `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |
 | `tests/smoke.sh` | Installer protocol validation (6 cases, 22 asserts). Requires `claude-restart` as a sibling repo. |
 | `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). |
@@ -141,7 +140,7 @@ If you upgrade an old `claude-restart` installation, the new shared block will b
 - **Requires the wrapper**: the zero-token hook path only works when `claude` is launched via the `claude()` shell function the installer adds. If you start Claude from an IDE integration that calls the binary directly, use `/handoff` (the slash command) or the skill.
 - **Strict match on the hook**: the UserPromptSubmit hook fires only on `handoff` or `handoff: ...` at the start of the prompt (case-insensitive).
 - **Payload is one-shot**: each handoff seeds exactly one session and is deleted afterwards. There is no persistent state.
-- **Skill trigger eval is conservative**: the `tests/eval-trigger.sh` harness uses `claude -p` with a slash-command shim, which under-measures side-effect-heavy skills like this one. Real interactive triggering is more reliable than the harness score. See [`.context/references/testing/00-index.md`](.context/references/testing/00-index.md) for details.
+- **Skill trigger eval is conservative**: the `tests/eval-trigger.sh` harness uses `claude -p` with a slash-command shim, which under-measures side-effect-heavy skills like this one. Real interactive triggering is more reliable than the harness score.
 
 ## Uninstall
 
