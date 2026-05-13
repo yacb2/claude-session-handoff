@@ -52,12 +52,16 @@ mkdir -p "$HANDOFF_DIR"
 
 PAYLOAD_FILE="${HANDOFF_DIR}/handoff-payload-${CLAUDE_HANDOFF_ID}"
 FLAG_FILE="${HANDOFF_DIR}/handoff-flag-${CLAUDE_HANDOFF_ID}"
+EXIT_TRIGGER="${HANDOFF_DIR}/handoff-exit-${CLAUDE_HANDOFF_ID}"
 
 if [ -n "$PAYLOAD" ]; then
   printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE"
 fi
 touch "$FLAG_FILE"
-kill -TERM $PPID 2>/dev/null
+# Signal the wrapper's watcher to terminate claude. The watcher (started by
+# claude-wrapper.sh v4+) polls this sentinel and sends SIGTERM itself, so the
+# hook never needs to invoke `kill` directly.
+touch "$EXIT_TRIGGER"
 
 printf '{"decision":"block","reason":"Handoff initiated via hook"}'
 exit 0

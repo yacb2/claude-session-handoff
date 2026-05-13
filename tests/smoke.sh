@@ -132,6 +132,28 @@ run_restart
 INSTALLED_VERSION=$(awk '/^# claude-wrapper version:/{print $4;exit}' "$CLAUDE_DIR/scripts/claude-wrapper.sh")
 assert "wrapper kept at v99 (not downgraded)" '[ "$INSTALLED_VERSION" = "99" ]'
 
+# --- Case 7: exit-trigger pattern (v4+) ---
+# The model side must use `touch $EXIT_TRIGGER` instead of `kill -TERM $PPID`,
+# and the wrapper must own the SIGTERM via a background watcher.
+echo "Case 7: exit-trigger pattern (no kill on the skill side)"
+new_sandbox case7
+run_handoff
+WRAP="$CLAUDE_DIR/scripts/claude-wrapper.sh"
+SKILL="$CLAUDE_DIR/skills/session-handoff/SKILL.md"
+CMD="$CLAUDE_DIR/commands/handoff.md"
+HOOK="$CLAUDE_DIR/scripts/handoff-prompt-hook.sh"
+assert "wrapper defines HANDOFF_EXIT sentinel"  'grep -q "HANDOFF_EXIT=" "$WRAP"'
+assert "wrapper has run_claude helper"          'grep -q "^run_claude()" "$WRAP"'
+assert "wrapper watcher signals SIGTERM"        'grep -q "kill -TERM \"\$CLAUDE_PID\"" "$WRAP"'
+assert "skill uses touch \$EXIT_TRIGGER"        'grep -q "touch \"\$EXIT_TRIGGER\"" "$SKILL"'
+assert "skill no longer kills PPID"             '! grep -q "kill -TERM \$PPID" "$SKILL"'
+assert "slash command uses touch trigger"       'grep -q "touch \"\$EXIT_TRIGGER\"" "$CMD"'
+assert "slash command no longer kills PPID"     '! grep -q "kill -TERM \$PPID" "$CMD"'
+assert "slash command drops kill from allowed-tools" '! grep -q "Bash(kill" "$CMD"'
+assert "hook uses touch trigger"                'grep -q "touch \"\$EXIT_TRIGGER\"" "$HOOK"'
+assert "hook no longer kills PPID"              '! grep -q "kill -TERM \$PPID" "$HOOK"'
+assert "wrapper version is >= 4"                '[ "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$WRAP")" -ge 4 ]'
+
 echo ""
 echo "Summary: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]
