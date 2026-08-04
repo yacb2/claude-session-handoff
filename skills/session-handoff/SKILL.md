@@ -4,6 +4,7 @@ description: Hand off the current Claude Code session to a fresh new one with th
 when_to_use: |
   Use when the user asks to hand off the session, start a fresh session that keeps the current context, restart while preserving what we're working on, or continue with the next phase of a plan in a clean session. Also suggest proactively when the user runs /compact on a long conversation, wants to reload hooks/skills/MCP servers mid-session, or hits compaction errors.
   When the user drops idiomatic signals that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over", "let's wrap this up and continue in a new chat" — do not execute the handoff directly. Propose it, summarize what would be seeded, and confirm before running.
+  The one exception is a handoff mandated by a running process rather than requested by a person: when an unattended run (plan execution, audit, loop) reaches its own handoff step, execute it without asking. Stopping to ask is the interruption such a run exists to avoid. This applies only while a run is in flight; in ordinary conversation the propose-first rule above stands unchanged.
   Do NOT use for /clear or wiping the conversation, for short conversations where /compact is enough, for restarting unrelated things like the dev server or docker, or for questions about what /compact or /clear actually do.
 ---
 
@@ -22,6 +23,10 @@ This skill closes the current Claude Code session and opens a new one with a han
 - The user says something like "start fresh but don't lose the plan".
 
 **Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over", "let's wrap this up and continue in a new chat" — do not call the handoff bash directly. Reply with a one-line proposal that names what would be seeded (current goal + open thread) and ask if they want it triggered. Only execute after they confirm.
+
+**Mandated by a running process — execute, do not propose.** When an unattended run (plan execution, audit, loop) reaches its handoff step, the handoff is a mandated step of that process, not a suggestion to the user. Execute it. Do not ask — stopping to ask is the failure this case exists to prevent.
+
+This case is narrow by design and does not weaken the one above it: it requires an unattended run to be **in flight**. A conversational session never qualifies, no matter how long it has run or how clearly a fresh session would help — there, the soft-signal rule still applies and you propose first.
 
 **Do NOT use** when:
 - The user only wants `/clear` (no context preserved).
