@@ -97,5 +97,56 @@ else
   no "E: non-handoff prompt is inert (rc=$RC out=$OUT trig=$TRIGGERED)"
 fi
 
+# Case F — no eval query may itself trigger the hook.
+#
+# `claude --settings <overlay>` MERGES with user settings rather than replacing
+# them (docs, cli-reference: "Values you set here override the same keys in your
+# settings.json files for this session. Keys you omit keep their file-based
+# values."). tests/eval-pty.sh's overlay sets only `permissions`, so every
+# globally registered UserPromptSubmit hook — including this project's own
+# handoff-prompt-hook.sh — is live inside every eval run.
+#
+# The collision is exact: the hook writes handoff-flag-$CLAUDE_HANDOFF_ID and
+# the eval treats that same path as proof the *skill* fired. A query whose
+# first word is "handoff" would therefore be scored PASS with the model never
+# having seen it — a tautology, not a test.
+#
+# This replays every query through the real hook rather than re-implementing
+# its keyword rule (tolower of $1, ':' onward stripped), so the check cannot
+# drift from the logic it guards.
+EVAL_DIR="$(cd "$(dirname "$0")/.." && pwd)/skills/session-handoff/evals"
+if ! command -v jq >/dev/null 2>&1; then
+  no "F: jq required to replay eval queries"
+else
+  F_TOTAL=0
+  F_BAD=""
+  for SET in "$EVAL_DIR"/trigger-eval.json "$EVAL_DIR"/trigger-eval-multilang.json; do
+    [ -f "$SET" ] || { no "F: eval set missing: $SET"; continue; }
+    # Index-driven rather than read-from-a-pipe: POSIX sh has no `read -d`,
+    # and piping would move the counters into a subshell where they'd be lost.
+    # jq builds the hook payload directly, so no query content is ever
+    # reinterpreted by the shell.
+    F_N=$(jq 'length' "$SET")
+    F_I=0
+    while [ "$F_I" -lt "$F_N" ]; do
+      F_TOTAL=$((F_TOTAL + 1))
+      run_hook "$(jq -c ".[$F_I] | {prompt: .query}" "$SET")" "$TEST_PID" "$PATH"
+      if [ "$TRIGGERED" = 1 ]; then
+        F_BAD="$F_BAD
+    - $(jq -r ".[$F_I].query" "$SET" | cut -c1-60)"
+      fi
+      F_I=$((F_I + 1))
+    done
+  done
+
+  if [ "$F_TOTAL" = 0 ]; then
+    no "F: no eval queries were replayed (eval sets empty or unreadable)"
+  elif [ -z "$F_BAD" ]; then
+    ok "F: none of $F_TOTAL eval queries trigger the hook directly"
+  else
+    no "F: eval queries that fire the hook without the model (tautological PASS):$F_BAD"
+  fi
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

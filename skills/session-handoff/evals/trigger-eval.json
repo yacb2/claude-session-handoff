@@ -126,5 +126,9 @@
   {
     "query": "abre una sesión nueva de tmux por favor, esta se quedó pegada en el ssh al staging",
     "should_trigger": false
+  },
+  {
+    "query": "Phase 3 of the plan is done and we're near the context limit; the plan's own next step is to hand off before phase 4 — go ahead and do it.",
+    "should_trigger": true
   }
 ]
