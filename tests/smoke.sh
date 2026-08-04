@@ -154,6 +154,41 @@ assert "hook uses touch trigger"                'grep -q "touch \"\$EXIT_TRIGGER
 assert "hook no longer kills PPID"              '! grep -q "kill -TERM \$PPID" "$HOOK"'
 assert "wrapper version is >= 4"                '[ "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$WRAP")" -ge 4 ]'
 
+# --- Case 8: opt-in HANDOFF_BELL (terminalSequence) ---
+# Runs the installed SessionStart hook for real, once per branch, and inspects
+# its JSON. The bell must be absent by default and present only under
+# HANDOFF_BELL=1 — asserting on the emitted payload, not on the source text.
+echo "Case 8: opt-in HANDOFF_BELL via terminalSequence"
+SS_HOOK="$CLAUDE_DIR/scripts/handoff-session-start.sh"
+BELL_ID="smoke-bell-$$"
+# The hook resolves its payload under $HOME/.claude/tmp, which is NOT
+# $CLAUDE_DIR (the installer's override points at $SB/claude). So the bell
+# case gets its own HOME rather than reusing the install sandbox's layout.
+BELL_HOME="$SANDBOX_BASE/bell-home"
+BELL_TMP="$BELL_HOME/.claude/tmp"
+mkdir -p "$BELL_TMP"
+
+# The hook consumes (deletes) the payload, so it is re-seeded per branch.
+seed_and_run() {
+  printf 'smoke payload' > "$BELL_TMP/handoff-payload-$BELL_ID"
+  env HOME="$BELL_HOME" HANDOFF_BELL="$1" CLAUDE_HANDOFF_ID="$BELL_ID" \
+    sh "$SS_HOOK" 2>/dev/null
+}
+
+BELL_OFF=$(seed_and_run 0)
+BELL_ON=$(seed_and_run 1)
+
+assert "bell off: hook still emits additionalContext" \
+  'printf "%s" "$BELL_OFF" | jq -e ".hookSpecificOutput.additionalContext" >/dev/null'
+assert "bell off: no terminalSequence key" \
+  'printf "%s" "$BELL_OFF" | jq -e "has(\"terminalSequence\") | not" >/dev/null'
+assert "bell on: terminalSequence present" \
+  'printf "%s" "$BELL_ON" | jq -e "has(\"terminalSequence\")" >/dev/null'
+assert "bell on: value is a bare BEL (allowlisted)" \
+  '[ "$(printf "%s" "$BELL_ON" | jq -r ".terminalSequence")" = "$(printf "\007")" ]'
+assert "bell on: systemMessage banner unaffected" \
+  'printf "%s" "$BELL_ON" | jq -e ".systemMessage" >/dev/null'
+
 echo ""
 echo "Summary: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]

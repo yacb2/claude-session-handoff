@@ -122,17 +122,38 @@ The wrapper loop checks both flag patterns (`restart-flag-<pid>` and `handoff-fl
 
 If you upgrade an old `claude-restart` installation, the new shared block will be created and the old `# claude-restart: start/end` block migrated automatically.
 
+## Optional: audible bell on handoff (`HANDOFF_BELL`)
+
+By default a handoff announces itself with the on-screen banner only. If you step away while a
+long turn finishes and want an audible cue when the new session lands, export:
+
+```sh
+export HANDOFF_BELL=1
+```
+
+The `SessionStart` hook then also emits a terminal bell alongside the banner. It is **off by
+default** on purpose — a handoff is not always something you are waiting on, and an unrequested
+bell is worse than none.
+
+Claude Code only forwards an allowlisted set of escape sequences from a hook (window/icon titles
+via OSC 0/1/2, notifications via OSC 9/99/777, and a bare BEL); anything else is silently
+dropped. This uses a bare BEL, the one form every terminal handles — the OSC notification
+variants each need a different sequence per emulator.
+
 ## Components
 
 | File | Purpose |
 |---|---|
 | `scripts/claude-wrapper.sh` | Unified POSIX wrapper that runs `claude` in a loop. On exit, checks per-PID flag files and either relaunches fresh (handoff) or with `--resume` (restart). Byte-for-byte identical to the copy in `claude-restart`. |
-| `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>`, emits both `additionalContext` (for Claude) and `systemMessage` (banner for you), deletes the payload. |
+| `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>`, emits both `additionalContext` (for Claude) and `systemMessage` (banner for you), plus an optional bell under `HANDOFF_BELL=1`; deletes the payload. |
 | `scripts/handoff-prompt-hook.sh` | UserPromptSubmit hook: intercepts `handoff` / `handoff: <text>` and triggers a handoff without going through the model. |
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |
-| `tests/smoke.sh` | Installer protocol validation (6 cases, 22 asserts). Requires `claude-restart` as a sibling repo. |
+| `tests/smoke.sh` | Installer protocol + hook output validation (8 cases, 38 asserts). Requires `claude-restart` as a sibling repo. |
+| `tests/wrapper-dispatch.sh` | Drives the wrapper's dispatch loop against a stub `claude` and asserts what it relaunches with. |
+| `tests/hook-guard.sh` | Regression tests for the UserPromptSubmit hook's guards, plus a check that no eval query can satisfy the eval by firing the hook instead of the skill. |
+| `tests/skill-consistency.sh` | Asserts the skill's `when_to_use` front-matter and its body enumerate the same trigger cases. |
 | `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). |
 
 ## Limitations
