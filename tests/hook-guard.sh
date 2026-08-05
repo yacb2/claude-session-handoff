@@ -16,7 +16,8 @@
 # touch the real ~/.claude/tmp.
 set -u
 
-HOOK="$(cd "$(dirname "$0")/.." && pwd)/scripts/handoff-prompt-hook.sh"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+HOOK="$REPO/scripts/handoff-prompt-hook.sh"
 TEST_PID=$$            # a genuine ancestor of the hook process when invoked below
 PASS=0
 FAIL=0
@@ -114,7 +115,7 @@ fi
 # This replays every query through the real hook rather than re-implementing
 # its keyword rule (tolower of $1, ':' onward stripped), so the check cannot
 # drift from the logic it guards.
-EVAL_DIR="$(cd "$(dirname "$0")/.." && pwd)/skills/session-handoff/evals"
+EVAL_DIR="$REPO/skills/session-handoff/evals"
 if ! command -v jq >/dev/null 2>&1; then
   no "F: jq required to replay eval queries"
 else

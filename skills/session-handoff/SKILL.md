@@ -4,7 +4,7 @@ description: Hand off the current Claude Code session to a fresh new one with th
 when_to_use: |
   Use when the user asks to hand off the session, start a fresh session that keeps the current context, restart while preserving what we're working on, or continue with the next phase of a plan in a clean session. Also suggest proactively when the user runs /compact on a long conversation, wants to reload hooks/skills/MCP servers mid-session, or hits compaction errors.
   When the user drops idiomatic signals that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over", "let's wrap this up and continue in a new chat" — do not execute the handoff directly. Propose it, summarize what would be seeded, and confirm before running.
-  The one exception is a handoff mandated by a running process rather than requested by a person: when an unattended run (plan execution, audit, loop) reaches its own handoff step, execute it without asking. Stopping to ask is the interruption such a run exists to avoid. This applies only while a run is in flight; in ordinary conversation the propose-first rule above stands unchanged.
+  The exception is a handoff mandated by a running process, not requested by a person: when an unattended run (plan execution, audit, loop) reaches its handoff step, execute without asking. Only while a run is in flight.
   Do NOT use for /clear or wiping the conversation, for short conversations where /compact is enough, for restarting unrelated things like the dev server or docker, or for questions about what /compact or /clear actually do.
 ---
 
