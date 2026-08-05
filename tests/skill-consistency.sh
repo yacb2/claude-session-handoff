@@ -32,6 +32,7 @@ no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 CASES='direct|asks to hand off|\*\*Direct trigger
 proactive|suggest proactively|\*\*Proactive trigger
 soft|idiomatic signals|\*\*Soft signal
+tiebreak|did they ask or did they observe|\*\*Tie-break
 mandated|mandated by a running process|\*\*Mandated by a running process
 donot|Do NOT use|\*\*Do NOT use\*\*'
 

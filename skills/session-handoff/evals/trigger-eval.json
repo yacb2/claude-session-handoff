@@ -41,7 +41,7 @@
   },
   {
     "query": "let's start fresh but please carry over the context — we just decided to use Redis instead of Memcached and there's a draft adr at .context/decisions/0014-cache-layer.md that needs finishing",
-    "expect": "propose"
+    "expect": "execute"
   },
   {
     "query": "give me a prompt I can paste into a new session to keep going with the plan, we just finished phase 1 of the migration",
@@ -109,15 +109,15 @@
   },
   {
     "query": "esta sesión se está volviendo pesada, podemos mudarnos a otra limpia conservando dónde vamos?",
-    "expect": "propose"
+    "expect": "execute"
   },
   {
     "query": "let's start over in a new session but keep the plan we just agreed on",
-    "expect": "propose"
+    "expect": "execute"
   },
   {
     "query": "instalé un plugin nuevo de pre-commit, podemos reiniciar pero seguir donde voy con el bug de migrations?",
-    "expect": "propose"
+    "expect": "execute"
   },
   {
     "query": "transferí el ticket a Maria, ya lo está revisando — ¿algo más que falte de mi parte?",
