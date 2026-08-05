@@ -55,8 +55,14 @@ BODY=$(awk '
 [ -n "$BODY" ] || no "could not extract body 'When to use this skill' section"
 
 # --- 1. every registered case appears on both sides -----------------------
+# Fed by a here-doc, not a pipe: a `printf | while` loop body runs in a SUBSHELL
+# in POSIX sh, so MISSING would be discarded at the `done`. An earlier version
+# worked around that with a temp file at a $$-derived path, which was appended
+# to without truncation and had no trap — a leftover file (interrupted run + PID
+# reuse, or any writer in a shared /tmp) was read back as drift. A here-doc
+# redirect keeps the loop in this shell and removes the temp file entirely.
 MISSING=""
-printf '%s\n' "$CASES" | while IFS='|' read -r ID WTU_RE BODY_RE; do
+while IFS='|' read -r ID WTU_RE BODY_RE; do
   [ -n "$ID" ] || continue
   W=0; B=0
   printf '%s' "$WTU"  | grep -qE "$WTU_RE"  || W=1
@@ -67,13 +73,10 @@ printf '%s\n' "$CASES" | while IFS='|' read -r ID WTU_RE BODY_RE; do
   WHERE=""
   [ "$W" = 1 ] && WHERE="when_to_use"
   [ "$B" = 1 ] && WHERE="${WHERE:+$WHERE+}body"
-  echo "$ID:$WHERE" >> "${TMPDIR:-/tmp}/skill-drift-$$"
-done
-
-if [ -f "${TMPDIR:-/tmp}/skill-drift-$$" ]; then
-  MISSING=$(cat "${TMPDIR:-/tmp}/skill-drift-$$")
-  rm -f "${TMPDIR:-/tmp}/skill-drift-$$"
-fi
+  MISSING="$MISSING $ID:$WHERE"
+done <<EOF
+$CASES
+EOF
 
 REG_COUNT=$(printf '%s\n' "$CASES" | grep -c '|')
 
@@ -93,6 +96,37 @@ if [ "$BODY_COUNT" = "$REG_COUNT" ]; then
   ok "body declares exactly $BODY_COUNT cases, matching the registry"
 else
   no "body declares $BODY_COUNT bold case labels but the registry has $REG_COUNT — register the new case (and add it to when_to_use)"
+fi
+
+# --- 3. when_to_use declares no case the registry doesn't know about ------
+# The symmetric counterpart to check 2, and the reason it is not optional:
+# check 2 only counts the BODY, so a case added to `when_to_use` alone — the
+# copy Claude Code reads when deciding whether to surface the skill at all —
+# was previously invisible. That is the same drift the file exists to stop,
+# just mirrored.
+#
+# Counting is not available here: when_to_use is prose with no structural
+# markers like the body's bold labels, and one line can carry two cases (the
+# first line holds both `direct` and `proactive`). So instead of counting,
+# every non-empty line must be CLAIMED by at least one registered regex. New
+# unregistered prose matches nothing and fails.
+WTU_ALL_RE=$(printf '%s\n' "$CASES" | awk -F'|' 'NF > 1 { printf "%s%s", sep, $2; sep = "|" }')
+
+UNCLAIMED=""
+while IFS= read -r LINE; do
+  # Skip blanks and lines that are only whitespace.
+  printf '%s' "$LINE" | grep -qE '[^[:space:]]' || continue
+  printf '%s' "$LINE" | grep -qE "$WTU_ALL_RE" && continue
+  UNCLAIMED="$UNCLAIMED
+    - $(printf '%s' "$LINE" | sed 's/^[[:space:]]*//' | cut -c1-60)"
+done <<EOF
+$WTU
+EOF
+
+if [ -z "$UNCLAIMED" ]; then
+  ok "every when_to_use line is claimed by a registered case"
+else
+  no "when_to_use has prose no registered case claims (unregistered trigger?):$UNCLAIMED"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
