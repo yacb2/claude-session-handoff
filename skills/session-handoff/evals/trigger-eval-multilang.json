@@ -5,7 +5,7 @@
   },
   {
     "query": "lass uns in einer neuen Session weitermachen, aber behalte was wir gerade beim Refactor des Authentifizierungs-Moduls gemacht haben",
-    "expect": "propose"
+    "expect": "execute"
   },
   {
     "query": "fai un handoff per favore, stiamo per raggiungere il limite di contesto e siamo a metà del refactor del middleware",
