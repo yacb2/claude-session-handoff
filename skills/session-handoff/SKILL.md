@@ -2,11 +2,10 @@
 name: session-handoff
 description: Hand off the current Claude Code session to a fresh new one with the current context seeded as a handoff prompt. Use when the user wants to keep working in a clean session without losing the plan — faster and cheaper than /compact since it opens a new process with hooks, skills, MCP, and the Claude Code binary reloaded.
 when_to_use: |
-  Use when the user asks to hand off the session, start a fresh session that keeps the current context, restart while preserving what we're working on, or continue with the next phase of a plan in a clean session. Also suggest proactively when the user runs /compact on a long conversation, wants to reload hooks/skills/MCP servers mid-session, or hits compaction errors.
-  When the user drops idiomatic signals that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly. Propose it, summarize what would be seeded, and confirm before running.
-  When a sentence matches more than one of those cases, did they ask or did they observe is the only tie-break: asking in any form — imperative, "let's ...", "can we ...?" — executes; describing a state or voicing a hedged opinion proposes. Wanting to keep the context never decides it, because every case wants that.
-  The exception is a handoff mandated by a running process, not requested by a person: when an unattended run (plan execution, audit, loop) reaches its handoff step, execute without asking. Only while a run is in flight.
+  Use when the user asks to hand off the session, start a fresh session that keeps the current context, restart while preserving what we're working on, or continue with the next phase of a plan in a clean session.
+  Also surface — without treating it as a request — when the user runs /compact on a long conversation, hits compaction errors, wants to reload hooks/skills/MCP servers mid-session, or signals that a fresh session would help ("this chat is getting unwieldy", "we need a fresh start").
   Do NOT use for /clear or wiping the conversation, for short conversations where /compact is enough, for restarting unrelated things like the dev server or docker, or for questions about what /compact or /clear actually do.
+  Surfacing is not executing: read the skill body before acting — it decides execute vs. propose-and-confirm — and when in doubt, propose and confirm, unless an unattended run mandates the handoff.
 ---
 
 # Session Handoff
@@ -15,6 +14,8 @@ This skill closes the current Claude Code session and opens a new one with a han
 
 ## When to use this skill
 
+The front-matter only routes — it decides whether this skill gets surfaced at all. This section is what decides whether to *execute* or to *propose*, and it is authoritative. Do not act on the always-loaded listing alone: the handoff is six lines of Bash and is easy to fire straight from a description, which is exactly how the wrong case gets run.
+
 **Direct trigger — execute immediately.** The user explicitly asks for a handoff: hand off this session, start a new session keeping context, restart preserving context, give me a prompt to continue in a new session, next phase of the plan in a clean session. Claude handles the user's intent across any language they write in; no need to enumerate translations.
 
 **Proactive trigger — suggest, then execute on confirmation.** Recommend a handoff (and ask before running it) when:
@@ -22,7 +23,7 @@ This skill closes the current Claude Code session and opens a new one with a han
 - Compaction errors appear in long sessions.
 - The user wants to reload hooks, skills, MCP servers, or pick up a new Claude Code binary version.
 
-**Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not call the handoff bash directly. Reply with a one-line proposal that names what would be seeded (current goal + open thread) and ask if they want it triggered. Only execute after they confirm.
+**Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly — propose it, summarize what would be seeded, and confirm before running. In practice: a one-line proposal naming what would be seeded (current goal + open thread), then ask if they want it triggered. Only execute after they confirm.
 
 **Tie-break — did they ask, or did they observe?** One sentence can match Direct, Proactive and Soft at once: "let's start over in a new session but keep the plan" matches all three, and wanting to keep the context does not separate them, because every case above wants that. Decide on this and nothing else:
 
