@@ -55,9 +55,22 @@ if [ -n "$DESCRIPTION_FILE" ] && [ -f "$DESCRIPTION_FILE" ]; then
   set -- "$@" "$EXTRA_ARGS" "$DESC"
 fi
 
+# The eval sets carry `expect: execute|propose|ignore`, but skill-creator's
+# harness only understands `should_trigger`. Derive a legacy-shaped set for it
+# instead of keeping a second copy of the queries in sync.
+#
+# The mapping is not a lossy compromise — it is the right one for THIS harness.
+# run_eval measures whether the skill is *surfaced*, and a query the skill must
+# propose on is still a query it must surface. So execute and propose both map
+# to true; only ignore maps to false. The execute-vs-propose distinction is
+# behaviour, which eval-pty.sh measures and this harness cannot see.
+LEGACY_SET=$(mktemp -t trigger-eval-legacy.XXXXXX.json)
+trap 'rm -f "$LEGACY_SET"; restore_skill' EXIT INT TERM
+jq '[.[] | {query, should_trigger: (.expect != "ignore")}]' "$EVAL_SET" > "$LEGACY_SET"
+
 cd "$SKILL_CREATOR"
 python -m scripts.run_eval \
-  --eval-set "$EVAL_SET" \
+  --eval-set "$LEGACY_SET" \
   --skill-path "$REPO/skills/session-handoff" \
   --model claude-opus-4-7 \
   "$@"

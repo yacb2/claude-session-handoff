@@ -170,5 +170,42 @@ else
   fi
 fi
 
+# Case G — every eval entry carries a usable `expect`.
+#
+# eval-pty.sh scores three behaviours (execute / propose / ignore) and skips an
+# entry whose `expect` it does not recognise. A skip inside a ~100-minute run is
+# a bad place to discover a typo, and the old boolean schema would be silently
+# unusable rather than loud. This is the fast check that catches it.
+#
+# It also guards the migration itself: a leftover `should_trigger` key means an
+# entry was never converted.
+if command -v jq >/dev/null 2>&1; then
+  G_BAD=""
+  G_TOTAL=0
+  for SET in "$EVAL_DIR"/trigger-eval.json "$EVAL_DIR"/trigger-eval-multilang.json; do
+    [ -f "$SET" ] || continue
+    G_OUT=$(jq -r '
+      to_entries[]
+      | select((.value.expect | IN("execute","propose","ignore")) | not)
+        // empty
+      | "\(.key):\(.value.expect // "<missing>")"
+    ' "$SET" 2>/dev/null)
+    G_LEGACY=$(jq -r '[.[] | select(has("should_trigger"))] | length' "$SET" 2>/dev/null)
+    G_TOTAL=$((G_TOTAL + $(jq 'length' "$SET" 2>/dev/null || echo 0)))
+    [ -n "$G_OUT" ] && G_BAD="$G_BAD
+    - $(basename "$SET") entries with a bad expect: $(printf '%s' "$G_OUT" | tr '\n' ' ')"
+    [ "${G_LEGACY:-0}" != 0 ] && G_BAD="$G_BAD
+    - $(basename "$SET") still has $G_LEGACY unmigrated should_trigger entries"
+  done
+
+  if [ "$G_TOTAL" = 0 ]; then
+    no "G: no eval entries found to validate"
+  elif [ -z "$G_BAD" ]; then
+    ok "G: all $G_TOTAL eval entries carry a valid expect value"
+  else
+    no "G: eval schema problems (eval-pty.sh would skip these):$G_BAD"
+  fi
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
