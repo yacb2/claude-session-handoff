@@ -68,6 +68,32 @@ detect_shell() {
   esac
 }
 
+# --- Atomic file installation ---
+
+# Install SRC at DST by writing a sibling temp file and renaming it into place.
+# Args: $1 = source, $2 = destination, $3 = optional chmod mode.
+#
+# `cp` onto DST truncates and rewrites DST's EXISTING inode. A POSIX shell reads
+# a script incrementally, and claude-wrapper.sh blocks inside `run_claude "$@"`
+# for the whole session with its dispatch loop still unread — so overwriting it
+# in place makes that shell resume at a byte offset that now points into
+# different content, in the process that owns the user's terminal. Renaming
+# swaps the directory entry to a NEW inode instead; the running shell keeps its
+# open file description on the old one and finishes cleanly.
+#
+# The temp file must be a sibling of DST: `mv` is atomic only within a
+# filesystem, and across one it degrades to copy-and-unlink.
+# Covered by tests/wrapper-atomic-install.sh.
+atomic_install() {
+  SRC="$1"; DST="$2"; MODE="${3:-}"
+  DST_TMP="$DST.new.$$"
+  cp "$SRC" "$DST_TMP"
+  if [ -n "$MODE" ]; then
+    chmod "$MODE" "$DST_TMP"
+  fi
+  mv "$DST_TMP" "$DST"
+}
+
 # --- Shared wrapper management ---
 
 # Read `# claude-wrapper version: N` from a file; echo 0 if missing/unparseable.
@@ -87,8 +113,7 @@ install_wrapper() {
   OURS=$(wrapper_version_of "$SCRIPT_DIR/scripts/claude-wrapper.sh")
   THEIRS=$(wrapper_version_of "$WRAPPER_PATH")
   if [ "$OURS" -gt "$THEIRS" ]; then
-    cp "$SCRIPT_DIR/scripts/claude-wrapper.sh" "$WRAPPER_PATH"
-    chmod +x "$WRAPPER_PATH"
+    atomic_install "$SCRIPT_DIR/scripts/claude-wrapper.sh" "$WRAPPER_PATH" 755
     if [ "$THEIRS" -eq 0 ]; then
       info "Shared wrapper installed (v$OURS)"
     else
@@ -327,16 +352,15 @@ install() {
 
   install_wrapper
 
-  cp "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh"
-  cp "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh"
-  chmod +x "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh"
+  atomic_install "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" 755
   info "Handoff hook scripts installed"
 
-  cp "$SCRIPT_DIR/commands/handoff.md" "$COMMANDS_DIR/handoff.md"
+  atomic_install "$SCRIPT_DIR/commands/handoff.md" "$COMMANDS_DIR/handoff.md"
   info "Slash command /handoff installed"
 
   mkdir -p "$SKILLS_DIR/session-handoff"
-  cp "$SCRIPT_DIR/skills/session-handoff/SKILL.md" "$SKILLS_DIR/session-handoff/SKILL.md"
+  atomic_install "$SCRIPT_DIR/skills/session-handoff/SKILL.md" "$SKILLS_DIR/session-handoff/SKILL.md"
   info "Skill session-handoff installed"
 
   if [ -n "$RC_FILE" ]; then
