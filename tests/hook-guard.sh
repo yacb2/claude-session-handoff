@@ -126,14 +126,35 @@ else
     # and piping would move the counters into a subshell where they'd be lost.
     # jq builds the hook payload directly, so no query content is ever
     # reinterpreted by the shell.
-    F_N=$(jq 'length' "$SET")
+    # A guard that skips what it cannot parse reports success for work it never
+    # did. An unparseable set makes `jq length` fail and F_N empty, and because
+    # the OTHER set keeps F_TOTAL above zero the emptiness check below would not
+    # fire — 8 queries would go unchecked under a green "ok". So the count is
+    # validated as a positive integer before it is trusted.
+    F_N=$(jq 'length' "$SET" 2>/dev/null)
+    case "$F_N" in
+      ''|*[!0-9]*) no "F: $(basename "$SET") is not a readable JSON array"; continue ;;
+      0)           no "F: $(basename "$SET") contains no queries"; continue ;;
+    esac
+
     F_I=0
     while [ "$F_I" -lt "$F_N" ]; do
+      # An entry with no `.query` string would replay as {"prompt":null}, which
+      # the hook treats as an empty prompt and always ignores — counted, but
+      # tested vacuously. A malformed entry must fail loudly instead, since the
+      # tautology this case exists to catch could hide inside one.
+      F_Q=$(jq -r ".[$F_I].query // empty" "$SET")
+      if [ -z "$F_Q" ]; then
+        no "F: entry $F_I of $(basename "$SET") has no non-empty .query string"
+        F_I=$((F_I + 1))
+        continue
+      fi
+
       F_TOTAL=$((F_TOTAL + 1))
       run_hook "$(jq -c ".[$F_I] | {prompt: .query}" "$SET")" "$TEST_PID" "$PATH"
       if [ "$TRIGGERED" = 1 ]; then
         F_BAD="$F_BAD
-    - $(jq -r ".[$F_I].query" "$SET" | cut -c1-60)"
+    - $(printf '%s' "$F_Q" | cut -c1-60)"
       fi
       F_I=$((F_I + 1))
     done
