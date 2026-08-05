@@ -1,34 +1,34 @@
 [
   {
     "query": "mach bitte einen Handoff, der Kontext wird zu groß und wir verlieren gleich den Plan vom Auth-Refactor",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "lass uns in einer neuen Session weitermachen, aber behalte was wir gerade beim Refactor des Authentifizierungs-Moduls gemacht haben",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "fai un handoff per favore, stiamo per raggiungere il limite di contesto e siamo a metà del refactor del middleware",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "iniziamo una sessione nuova portando avanti il piano della migrazione a pgvector",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "ハンドオフをお願いします、コンテキストの上限に近づいているのに認証のリファクタリングの途中です",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "新しいセッションで続けたい、データベース移行の計画は維持してください",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "请做一个 handoff，会话太长了，我们快要达到上下文上限，正在重构认证中间件",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "我想在新会话里继续，但保留我们当前关于数据库迁移的计划",
-    "should_trigger": true
+    "expect": "execute"
   }
 ]

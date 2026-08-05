@@ -14,8 +14,21 @@
 # trigger, but no watcher is listening and the session stays alive until we
 # send /exit.
 #
+# Eval-set schema (both files in skills/session-handoff/evals/):
+#
+#   [ { "query": "...", "expect": "execute" | "propose" | "ignore" }, ... ]
+#
+# `expect` names the behaviour SKILL.md mandates, not merely whether the skill
+# is relevant. The earlier boolean `should_trigger` could not express this: it
+# scored PASS only when the marker appeared, so the proactive and soft-signal
+# queries — where the skill must ask FIRST — were scored FAIL for behaving
+# correctly, and PASS only when the model broke the propose-first rule. Roughly
+# 30% of the positives were unwinnable, which put a structural ceiling under
+# every measurement taken with it.
+#
 # Requires: expect, jq, the session-handoff skill installed in ~/.claude/skills/.
 # Usage:    ./tests/eval-pty.sh [--query-limit N] [--timeout SECONDS]
+#                               [--eval-set FILE] [--model NAME]
 
 set -e
 
@@ -78,21 +91,46 @@ trap 'rm -f "$SETTINGS_OVERLAY"' EXIT
 # - The polling loop uses `expect -timeout 1 -re ".+"` instead of `sleep 1`
 #   so the PTY keeps draining — without that the spawned claude blocks on
 #   output and never finishes thinking.
+#
+# Three-way scoring. SKILL.md defines three behaviours, and the marker file
+# alone only separates "executed" from "did not". Collapsing that into a
+# boolean is what made ~30% of the positives unwinnable: a query the skill
+# must PROPOSE on scored FAIL for behaving correctly, and scored PASS only by
+# violating the propose-first rule.
+#
+# `propose` is therefore measured with a second turn rather than by parsing the
+# reply. Text parsing is not an option here — the PTY log echoes the query
+# itself, so grepping for "handoff" matches the user's own words. Confirming is
+# mechanical and uses the same trustworthy signal:
+#
+#   execute -> the marker must appear on turn 1.
+#   ignore  -> the marker must never appear.
+#   propose -> the marker must NOT appear on turn 1, and MUST appear after a
+#              confirmation. That is exactly SKILL.md's "Only execute after
+#              they confirm."
+#
+# Known weak spot, recorded rather than papered over: a model that ignores a
+# `propose` query entirely and then executes on the bare confirmation scores a
+# false PASS. It cannot produce a false PASS for the failure this fixes — an
+# immediate un-asked execution always fails turn 1.
 run_one() {
   HANDOFF_ID="$1"
   QUERY="$2"
   TIMEOUT="$3"
+  MODE="$4"
   FLAG_FILE="$TMP_DIR/handoff-flag-$HANDOFF_ID"
   PAYLOAD_FILE="$TMP_DIR/handoff-payload-$HANDOFF_ID"
   EXIT_TRIGGER="$TMP_DIR/handoff-exit-$HANDOFF_ID"
-  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER"
+  HELD_FILE="$TMP_DIR/handoff-held-$HANDOFF_ID"
+  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$HELD_FILE"
 
   CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >/dev/null 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
     log_user 0
     spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL
-    # Drain startup output (5s, no real match).
-    expect -timeout 5 -re "no_match_drain"
+    # Wait for the session to be up before starting the clock, so the measured
+    # window is model time and not startup time.
+    expect -timeout 60 -re {auto mode|Welcome back|Try "}
     send -- {$QUERY}
     send -- "\x1b\[13u"
     set deadline [expr {[clock seconds] + $TIMEOUT}]
@@ -100,66 +138,95 @@ run_one() {
       expect -timeout 1 -re ".+"
       if {[file exists "$FLAG_FILE"]} { break }
     }
+    # Turn 2, only for propose, and only if turn 1 correctly held off.
+    if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
+      exec touch "$HELD_FILE"
+      send -- {sí, hazlo / yes, go ahead}
+      send -- "\x1b\[13u"
+      set deadline2 [expr {[clock seconds] + $TIMEOUT}]
+      while {[clock seconds] < \$deadline2} {
+        expect -timeout 1 -re ".+"
+        if {[file exists "$FLAG_FILE"]} { break }
+      }
+    }
     send -- "/exit"
     send -- "\x1b\[13u"
     expect eof
 EXP
 
-  if [ -f "$FLAG_FILE" ]; then
-    rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER"
-    return 0
-  fi
-  return 1
+  FIRED=1; [ -f "$FLAG_FILE" ] && FIRED=0
+  HELD=1;  [ -f "$HELD_FILE" ] && HELD=0
+  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$HELD_FILE"
+
+  case "$MODE" in
+    execute) [ "$FIRED" = 0 ] && return 0
+             VERDICT="never executed"; return 1 ;;
+    ignore)  [ "$FIRED" = 1 ] && return 0
+             VERDICT="executed on a query it should have left alone"; return 1 ;;
+    propose) if [ "$HELD" != 0 ]; then
+               VERDICT="executed immediately instead of proposing"; return 1
+             fi
+             [ "$FIRED" = 0 ] && return 0
+             VERDICT="held off, but did not execute after confirmation"; return 1 ;;
+    *)       VERDICT="unknown expect value '$MODE'"; return 1 ;;
+  esac
 }
 
 QUERIES=$(jq -c '.[]' "$EVAL_SET")
 TOTAL=0
 HITS=0
 N=0
+BAD=0
+# Per-mode tallies: an aggregate score hides which behaviour is broken, and
+# `propose` is the one this schema exists to measure.
+H_execute=0; T_execute=0
+H_propose=0; T_propose=0
+H_ignore=0;  T_ignore=0
 
 echo "# eval-pty: session-handoff trigger eval"
 echo "# eval-set: $EVAL_SET"
 echo "# per-query timeout: ${PER_QUERY_TIMEOUT}s"
 echo
 
-printf '%s\n' "$QUERIES" | while IFS= read -r row; do
+# Here-doc, not a pipe: a `printf | while` loop body runs in a subshell in
+# POSIX sh, which is why the counters previously had to round-trip through a
+# file on disk. Feeding the loop by redirect keeps them in this shell.
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
   N=$((N + 1))
   if [ "$QUERY_LIMIT" -gt 0 ] && [ "$N" -gt "$QUERY_LIMIT" ]; then break; fi
 
-  SHOULD=$(printf '%s' "$row" | jq -r '.should_trigger')
-  QUERY=$(printf '%s' "$row"  | jq -r '.query')
+  MODE=$(printf '%s' "$row"  | jq -r '.expect // empty')
+  QUERY=$(printf '%s' "$row" | jq -r '.query // empty')
+
+  case "$MODE" in
+    execute|propose|ignore) ;;
+    *) printf '[%02d] SKIP :: unusable entry (expect=%s)\n' "$N" "${MODE:-<missing>}"
+       BAD=$((BAD + 1)); continue ;;
+  esac
+
   HANDOFF_ID="eval-$$-$N"
+  PREVIEW=$(printf '%s' "$QUERY" | cut -c1-64)
+  printf '[%02d] %-7s :: %s ... ' "$N" "$MODE" "$PREVIEW"
 
-  PREVIEW=$(printf '%s' "$QUERY" | cut -c1-70)
-  printf '[%02d] should_trigger=%s :: %s ... ' "$N" "$SHOULD" "$PREVIEW"
-
-  if run_one "$HANDOFF_ID" "$QUERY" "$PER_QUERY_TIMEOUT"; then
-    TRIGGERED=true
-  else
-    TRIGGERED=false
-  fi
-
-  if [ "$SHOULD" = "true" ] && [ "$TRIGGERED" = "true" ]; then
-    echo "PASS (triggered)"
+  VERDICT=""
+  if run_one "$HANDOFF_ID" "$QUERY" "$PER_QUERY_TIMEOUT" "$MODE"; then
+    echo "PASS"
     HITS=$((HITS + 1))
-  elif [ "$SHOULD" = "false" ] && [ "$TRIGGERED" = "false" ]; then
-    echo "PASS (correctly skipped)"
-    HITS=$((HITS + 1))
-  elif [ "$SHOULD" = "true" ] && [ "$TRIGGERED" = "false" ]; then
-    echo "FAIL (missed)"
+    eval "H_$MODE=\$((H_$MODE + 1))"
   else
-    echo "FAIL (false positive)"
+    echo "FAIL ($VERDICT)"
   fi
   TOTAL=$((TOTAL + 1))
-  # Counters lost across pipe subshells in POSIX sh — write to disk.
-  echo "$TOTAL $HITS" > "$TMP_DIR/eval-pty-tally-$$"
-done
-
-if [ -f "$TMP_DIR/eval-pty-tally-$$" ]; then
-  read TOTAL HITS < "$TMP_DIR/eval-pty-tally-$$"
-  rm -f "$TMP_DIR/eval-pty-tally-$$"
-fi
+  eval "T_$MODE=\$((T_$MODE + 1))"
+done <<QUERY_ROWS
+$QUERIES
+QUERY_ROWS
 
 echo
-echo "# result: $HITS / $TOTAL"
-[ "$TOTAL" -eq 0 ] || [ "$HITS" -eq "$TOTAL" ]
+echo "# execute : $H_execute / $T_execute"
+echo "# propose : $H_propose / $T_propose"
+echo "# ignore  : $H_ignore / $T_ignore"
+echo "# result  : $HITS / $TOTAL"
+[ "$BAD" -eq 0 ] || echo "# WARNING: $BAD entries skipped as unusable"
+[ "$TOTAL" -gt 0 ] && [ "$BAD" -eq 0 ] && [ "$HITS" -eq "$TOTAL" ]

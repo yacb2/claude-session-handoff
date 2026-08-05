@@ -154,7 +154,8 @@ variants each need a different sequence per emulator.
 | `tests/wrapper-dispatch.sh` | Drives the wrapper's dispatch loop against a stub `claude` and asserts what it relaunches with. |
 | `tests/hook-guard.sh` | Regression tests for the UserPromptSubmit hook's guards, plus a check that no eval query can satisfy the eval by firing the hook instead of the skill. |
 | `tests/skill-consistency.sh` | Asserts the skill's `when_to_use` front-matter and its body enumerate the same trigger cases. |
-| `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). |
+| `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). Derives a legacy boolean set from `expect`. |
+| `tests/eval-pty.sh` | Interactive trigger eval over a real PTY. Scores `execute` / `propose` / `ignore` separately — a query the skill must ask about first is verified by confirming on a second turn. |
 
 ## Limitations
 

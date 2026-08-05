@@ -1,134 +1,134 @@
 [
   {
     "query": "esta conversación está enorme, llevamos como 3 horas iterando sobre el wrapper. Necesito que arranquemos una sesión nueva pero sin perder lo que llevamos del bug de handoff. ¿Puedes hacer un handoff?",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "ok podemos hacer un handoff de esto? estamos en /Users/yoel/repos/api-django trabajando el bug del JWT y la convo se está poniendo lenta",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "haz un handoff porfa, ya casi llegamos al limite de contexto",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "sigamos en limpio — pero antes asegurate que mi proximo turno arranque sabiendo que el plan sigue siendo migrar a pgvector y que la PR #347 quedo a la espera del review de Maria",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "dame un prompt para iniciar una nueva sesión con este contexto. Llevamos largo y quiero seguir en limpio sin perder donde estamos del refactor del auth",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "inicia una nueva sesión limpia para continuar con el siguiente punto del plan, ya cerramos la fase de wrapper unificado y toca arrancar con el smoke test del skill",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "nueva sesión en limpio para la siguiente fase del plan por favor, esta conversación está pesada",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "dame el prompt para arrancar la fase 2 en una sesión nueva, ya quedó cerrada la fase 1",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "the conversation is getting massive, can you hand this off to a fresh session? we're mid-way through refactoring the auth middleware in src/auth/middleware.ts and there are 3 failing tests we still need to fix",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "do a handoff, my next session needs to know I'm on branch feat/onboarding-v2 and waiting on the legal review before merging",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "let's start fresh but please carry over the context — we just decided to use Redis instead of Memcached and there's a draft adr at .context/decisions/0014-cache-layer.md that needs finishing",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "give me a prompt I can paste into a new session to keep going with the plan, we just finished phase 1 of the migration",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "faça um handoff disso aqui? a sessão tá muito longa e quero recarregar os hooks novos que acabei de instalar do plugin de boilerplate-sync",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "fais un handoff stp, on est en train de migrer le frontend vers Vue 3.5 et il reste 4 composants à toucher",
-    "should_trigger": true
+    "expect": "execute"
   },
   {
     "query": "creo que /compact va a fallar otra vez con esta convo tan larga, hay alguna otra forma de seguir trabajando en limpio sin perder el plan del refactor?",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "necesito recargar los hooks nuevos que metí en settings.json (los de pre-commit) pero quiero seguir donde estoy con el bug del CORS",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "/clear",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "borrá todo lo de esta conversación y empezamos de cero, no necesito ningún contexto",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "wipe the conversation history please, I want a clean slate, not carrying anything over",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "reinicia el servidor de Django, está colgado en localhost:8000 y no responde",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "restart docker compose, the postgres container is stuck and migrations are failing",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "hand off this task to the code-reviewer subagent, I want it to look at the diff in src/billing/",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "delegate this to another agent — the security-review skill should look at the auth changes before we ship",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "what does /compact actually do? is it the same as /clear?",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "explain the difference between /compact, /clear and --resume in Claude Code please",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "dame un prompt corto para describir esta tarea en el issue tracker",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "give me a prompt I can use for ChatGPT to summarize this PR",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "esta sesión se está volviendo pesada, podemos mudarnos a otra limpia conservando dónde vamos?",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "let's start over in a new session but keep the plan we just agreed on",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "instalé un plugin nuevo de pre-commit, podemos reiniciar pero seguir donde voy con el bug de migrations?",
-    "should_trigger": true
+    "expect": "propose"
   },
   {
     "query": "transferí el ticket a Maria, ya lo está revisando — ¿algo más que falte de mi parte?",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "abre una sesión nueva de tmux por favor, esta se quedó pegada en el ssh al staging",
-    "should_trigger": false
+    "expect": "ignore"
   },
   {
     "query": "Phase 3 of the plan is done and we're near the context limit; the plan's own next step is to hand off before phase 4 — go ahead and do it.",
-    "should_trigger": true
+    "expect": "execute"
   }
 ]
