@@ -62,8 +62,16 @@ BODY=$(awk '
 # reuse, or any writer in a shared /tmp) was read back as drift. A here-doc
 # redirect keeps the loop in this shell and removes the temp file entirely.
 MISSING=""
+REG_COUNT=0
+WTU_ALL_RE=""
 while IFS='|' read -r ID WTU_RE BODY_RE; do
   [ -n "$ID" ] || continue
+  # Derived here rather than by re-scanning $CASES afterwards, so the count and
+  # the alternation describe exactly the cases this loop checked. A separate
+  # `grep -c '|'` would also count a malformed line that `[ -n "$ID" ]` skips,
+  # inflating the count that check 2 compares against.
+  REG_COUNT=$((REG_COUNT + 1))
+  WTU_ALL_RE="${WTU_ALL_RE:+$WTU_ALL_RE|}$WTU_RE"
   W=0; B=0
   printf '%s' "$WTU"  | grep -qE "$WTU_RE"  || W=1
   printf '%s' "$BODY" | grep -qE "$BODY_RE" || B=1
@@ -78,7 +86,6 @@ done <<EOF
 $CASES
 EOF
 
-REG_COUNT=$(printf '%s\n' "$CASES" | grep -c '|')
 
 if [ -z "$MISSING" ]; then
   ok "all $REG_COUNT trigger cases present in BOTH when_to_use and body"
@@ -110,8 +117,6 @@ fi
 # first line holds both `direct` and `proactive`). So instead of counting,
 # every non-empty line must be CLAIMED by at least one registered regex. New
 # unregistered prose matches nothing and fails.
-WTU_ALL_RE=$(printf '%s\n' "$CASES" | awk -F'|' 'NF > 1 { printf "%s%s", sep, $2; sep = "|" }')
-
 UNCLAIMED=""
 while IFS= read -r LINE; do
   # Skip blanks and lines that are only whitespace.
