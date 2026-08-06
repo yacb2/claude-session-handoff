@@ -43,12 +43,18 @@ chmod +x "$SANDBOX/bin/claude"
 #   propose r1  : hold, then fire on turn 2 -> ok
 #   propose r2  : hold, never fire          -> no-execute-after-confirm
 #   propose r3  : fire on TURN 1            -> executed-immediately (faithful)
+#
+# The stub also writes the `handoff-fired-<id>` timing file wherever the real
+# expect script would (BL-014 step 1): whenever the flag appears, tagged with
+# the turn it appeared on. Fixed values, since the point is the aggregation,
+# not the latency — turn1 7s, turn2 11s.
 write_stub() {
   cat > "$SANDBOX/bin/expect" <<'STUB'
 #!/bin/sh
 IN=$(cat)
 pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
 FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
+FIRED=$(pathof fired)
 [ -n "$FLAG" ] || exit 0
 BASE=${FLAG##*/}; REP=${BASE##*-}; REST=${BASE%-*}; QN=${REST##*-}
 # Inverted latency: earlier queries finish LAST, so completion order differs
@@ -57,13 +63,15 @@ case "$QN" in 1) sleep 0.6 ;; 2) sleep 0.3 ;; esac
 case "$IN" in
   *'"propose" == "propose"'*)
     case "$REP" in
-      1) touch "$ALIVE"; touch "$FLAG" ;;
+      1) touch "$ALIVE"; touch "$FLAG"; printf 'turn2 11\n' > "$FIRED" ;;
       2) touch "$ALIVE" ;;
-      3) touch "$FLAG"; touch "$TURN1"; touch "$ALIVE" ;;
+      3) touch "$FLAG"; touch "$TURN1"; touch "$ALIVE"; printf 'turn1 7\n' > "$FIRED" ;;
     esac ;;
   *)
     touch "$ALIVE"
-    case $((REP % 2)) in 1) touch "$FLAG"; touch "$TURN1" ;; esac ;;
+    case $((REP % 2)) in
+      1) touch "$FLAG"; touch "$TURN1"; printf 'turn1 7\n' > "$FIRED" ;;
+    esac ;;
 esac
 exit 0
 STUB
@@ -123,6 +131,16 @@ ORDER=$(grep -oE '^\[[0-9]+\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//'
 [ "$RC" -ne 0 ] \
   && ok "exit status is non-zero when reps are intermittent" \
   || no "harness exited 0 despite intermittent queries"
+
+# Fire timings (BL-014 step 1). The stub fires on 6 of the 9 units — q1 and q3
+# on reps 1 and 3 (turn 1), q2 on rep 1 (turn 2) and rep 3 (turn 1) — so the
+# aggregate must be n=6 with turn1 max 7s, turn2 max 11s, overall max 11s.
+# Asserting the breakdown and not just "a line appeared" is the point: step 2
+# sets the absence-arm deadline off this max, and a max computed over the wrong
+# subset would justify a deadline that truncates real fires.
+grep -qE '^# observed fire times \(n=6 of 9 units\): turn1 max 7s · turn2 max 11s · overall max 11s' "$OUT" \
+  && ok "fire times are aggregated per turn and overall" \
+  || no "fire-time aggregate wrong — got: $(grep -E 'observed fire times' "$OUT")"
 
 # --- the classifier must depend on the turn-1 marker, not on an absence ---
 # Fires on turn 1 for a propose query. A classifier that reads "no held file"
