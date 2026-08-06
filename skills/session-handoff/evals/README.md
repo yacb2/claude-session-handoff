@@ -33,6 +33,33 @@ So a 100% run means "the four conversational cases held", not "the policy is cov
 fifth needs a different harness — one that runs the skill inside an actual `aidex-plan-exec` or
 loop — and none exists.
 
+## Four entries measure the precondition, not the trigger
+
+`trigger-eval.json` entries 5, 8, 12 and 29 refer to context the harness never supplies —
+"con **este contexto**", "ya quedó cerrada **la fase 1**", "**the plan** we just agreed on".
+Every unit is a **fresh** session whose first message is the query, so there is no such context.
+
+Turn-1 transcripts show the model routing correctly and then asking for the missing material —
+*"I don't have access to the previous conversation where the plan was agreed on … Could you
+paste the plan? I'll draft the handoff prompt and fire the new session immediately"* — including
+the zero-token `handoff:` path. It declines to invent a brief about work it cannot see.
+
+So their scores are about the precondition, not the trigger. The split is visible across the
+whole set: entries that **carry** their context pass (entry 2 names the repo and the bug and
+scores 3/3); entries that merely **point at** it fail. All four now carry a `why` saying so, so
+a future 0/3 does not get diagnosed as a SKILL.md defect the way this one nearly was.
+
+They were deliberately **not** rewritten to carry their context. "Keep the plan we just agreed
+on" is how people actually ask; a version that recites its own referent is a sentence nobody
+types, and the set would lose its only coverage of implicit reference while gaining a number
+that looks better.
+
+**So implicit reference is a second known-uncovered shape**, alongside the "Mandated by a
+running process" case above. Covering it needs the harness to establish context before sending
+the query — a priming turn — which re-baselines every entry, not just these four. Until then,
+four of 33 entries in the main set measure the precondition, and the headline rate carries them
+at face value.
+
 ## Five entries measure comprehension, not policy
 
 `trigger-eval.json` entries 21, 22, 25, 26 and 31 — "hand off this task to the code-reviewer
