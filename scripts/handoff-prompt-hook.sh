@@ -20,7 +20,21 @@ INPUT=$(cat)
 if command -v jq >/dev/null 2>&1; then
   PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
 else
-  PROMPT=$(printf '%s' "$INPUT" | grep -o '"prompt"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/^"prompt"[[:space:]]*:[[:space:]]*"//;s/"$//')
+  # The fallback must decode JSON, not merely find it. A `[^"]*` match ends at
+  # the first ESCAPED quote, so `handoff: fix the \"parser\" bug` arrived as
+  # `handoff: fix the \` — the rest of the brief silently lost. And without
+  # unescaping, a multi-line brief arrives carrying literal two-character \n
+  # sequences, which is the same "the brief read is not the brief written"
+  # failure the jq path was fixed for. Covered by hook-guard.sh Cases H and K,
+  # which now run under BOTH paths.
+  #
+  # `(([^"\\]|\\.)*)` is a JSON string body: any char that is neither quote
+  # nor backslash, or any escaped pair. Unescaping order matters — backslash
+  # last, so a literal \\n is not turned into a newline.
+  PROMPT=$(printf '%s' "$INPUT" \
+    | sed -nE 's/.*"prompt"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' \
+    | sed -e 's/\\n/\
+/g' -e 's/\\t/\t/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
 fi
 
 # Trim surrounding whitespace at STRING level. `sed 's/^[[:space:]]*//'` is
@@ -29,39 +43,42 @@ fi
 TRIMMED=${PROMPT#"${PROMPT%%[![:space:]]*}"}
 TRIMMED=${TRIMMED%"${TRIMMED##*[![:space:]]}"}
 
-# Leading keyword (case-insensitive), payload casing preserved. Taken with
-# parameter expansion rather than awk, which printed field 1 of EVERY line.
+# Leading keyword, payload casing preserved. Taken with parameter expansion
+# rather than awk, which printed field 1 of EVERY line.
+#
+# The case-insensitive match is a glob rather than a `tr` pipeline because this
+# gate runs on EVERY prompt submit in every session, and ~100% of them are not
+# handoffs — it is the one line in this hook on a hot path, so it pays no forks.
 FIRSTWORD=${TRIMMED%%[[:space:]]*}
-KEYWORD=$(printf '%s' "${FIRSTWORD%%:*}" | tr '[:upper:]' '[:lower:]')
 
-case "$KEYWORD" in
-  handoff)
+case "${FIRSTWORD%%:*}" in
+  [Hh][Aa][Nn][Dd][Oo][Ff][Ff])
     ;;
   *)
     exit 0
     ;;
 esac
 
-# Detect payload — anything after "handoff" or "handoff:"
-PAYLOAD=""
-LOWER=$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')
-case "$LOWER" in
-  handoff)
-    PAYLOAD=""
-    ;;
-  handoff:*)
+# Detect payload — anything after "handoff" or "handoff:".
+# Branch on FIRSTWORD, which is already computed: the gate above has already
+# established that it is `handoff` or `handoff:...`. The previous form
+# lowercased the ENTIRE multi-line brief with tr just to test its first token,
+# and parsed the prompt a second time under a different grammar.
+case "$FIRSTWORD" in
+  *:*)
     # Everything after the first colon. `cut -c9-` was line-oriented and cut 8
     # characters off EVERY line: "Next phase is the parser." arrived as
     # "se is the parser.". Covered by hook-guard.sh Case H.
     REST=${TRIMMED#*:}
-    PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
     ;;
   *)
-    # "handoff something" without colon — treat the rest as payload.
+    # "handoff" alone, or "handoff something" without a colon. Stripping the
+    # first word yields "" in the bare case, so both fold into one arm.
     REST=${TRIMMED#"$FIRSTWORD"}
-    PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
     ;;
 esac
+# One leading-whitespace strip for every arm, rather than one per arm.
+PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
 
 # Verify the handoff wrapper is actually an ancestor of this process.
 #

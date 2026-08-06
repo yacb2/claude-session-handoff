@@ -127,18 +127,35 @@ fi
 #   `cut -c9-` is line-oriented, so once jq works it strips 8 characters from
 #   EVERY line of the brief, not just the "handoff:" prefix on the first.
 # A handoff brief is multi-line by construction — this is the primary path.
-MULTI='handoff: continue the refactor
-Next phase is the parser.
-    indented line'
-run_hook '{"prompt":"handoff: continue the refactor\nNext phase is the parser.\n    indented line"}' "$TEST_PID" "$PATH"
+# Run under BOTH paths. The guard matrix here is prompt-shape x jq-presence,
+# and for a while only two of its four cells existed: the sole no-jq case used
+# a single-line prompt, and the sole multi-line case ran with jq available.
+# That hole is exactly why a fix to the jq branch alone could ship green while
+# the fallback still corrupted the brief.
 EXPECT_PAYLOAD='continue the refactor
 Next phase is the parser.
     indented line'
-if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = "$EXPECT_PAYLOAD" ]; then
-  ok "H: a multi-line handoff payload survives verbatim"
-else
-  no "H: multi-line payload mangled (trig=$TRIGGERED) got=[$PAYLOAD_OUT]"
-fi
+for HP in "$PATH" "$NOJQ"; do
+  [ "$HP" = "$PATH" ] && WHICH="jq" || WHICH="no-jq"
+  run_hook '{"prompt":"handoff: continue the refactor\nNext phase is the parser.\n    indented line"}' "$TEST_PID" "$HP"
+  if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = "$EXPECT_PAYLOAD" ]; then
+    ok "H/$WHICH: a multi-line handoff payload survives verbatim"
+  else
+    no "H/$WHICH: multi-line payload mangled (trig=$TRIGGERED) got=[$PAYLOAD_OUT]"
+  fi
+done
+
+# Escaped quotes are the other shape a regex-based extractor gets wrong: a
+# naive "[^\"]*" match ends at the backslash and silently truncates the brief.
+for HP in "$PATH" "$NOJQ"; do
+  [ "$HP" = "$PATH" ] && WHICH="jq" || WHICH="no-jq"
+  run_hook '{"prompt":"handoff: fix the \"parser\" bug"}' "$TEST_PID" "$HP"
+  if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = 'fix the "parser" bug' ]; then
+    ok "K/$WHICH: a payload containing escaped quotes survives verbatim"
+  else
+    no "K/$WHICH: escaped-quote payload mangled (trig=$TRIGGERED) got=[$PAYLOAD_OUT]"
+  fi
+done
 
 # Case I — bare `handoff` means "fresh session, NO seeded context" (the hook's
 # own header says so). CLAUDE_HANDOFF_ID is the wrapper PID and is stable for

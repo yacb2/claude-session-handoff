@@ -135,7 +135,11 @@ DESC=$(field_of "$SKILL" description)
 # Both fields must be non-empty. An extractor that silently returns nothing
 # measures 0 chars and passes any budget — a vacuous guard is worse than none,
 # because it reports success.
-[ -n "$DESC" ] || no "could not extract the description field"
+if [ -z "$DESC" ]; then
+  no "could not extract the description field"
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  exit 1
+fi
 
 measure() { printf '%s%s' "$1" "$(printf '%s\n' "$2" | sed 's/^[[:space:]]*//')" | wc -m | tr -d '[:space:]'; }
 LISTING_LEN=$(measure "$DESC" "$WTU")
@@ -151,7 +155,7 @@ fi
 # `description` is block-style and whose true length is known, so a regression
 # to a line-oriented extractor fails here instead of silently passing check 3.
 FIXTURE="${TMPDIR:-/tmp}/skill-consistency-fixture.$$.md"
-PAD=$(: ; i=0; while [ $i -lt 40 ]; do printf 'padding '; i=$((i+1)); done)
+PAD=$(i=0; while [ $i -lt 40 ]; do printf 'padding '; i=$((i+1)); done)
 {
   printf -- '---\n'
   printf 'name: fixture\n'
