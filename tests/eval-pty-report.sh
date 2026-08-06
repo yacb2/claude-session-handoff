@@ -1,20 +1,21 @@
 #!/bin/sh
-# Structural guard for tests/eval-pty.sh's reporting layer.
+# Structural guard for tests/eval-pty.sh's reporting and classification layers.
 #
-# eval-pty.sh spends ~100 minutes driving real claude sessions, so its report
-# logic — rates, intermittency, per-mode tallies, the noise floor — was
-# previously only ever exercised by a run nobody would repeat to check a
-# formatting change. This drives the same code path in seconds by putting a
-# stub `expect` on PATH.
+# eval-pty.sh spends ~1 hour driving real claude sessions, so its report logic —
+# rates, intermittency, per-mode tallies, the noise floor — would otherwise only
+# ever be exercised by a run nobody repeats to check a formatting change. This
+# drives the same code path in seconds by putting a stub `expect` on PATH.
 #
-# What the stub does: it reads the here-doc eval-pty.sh feeds to expect, pulls
-# the flag/held paths out of it, and creates them on a fixed rule keyed to the
-# rep number. That makes every outcome DETERMINISTIC, which is the point — it
-# tests that the harness reports what happened, not what the model did.
+# THE STUB MUST BE FAITHFUL. An earlier version produced `executed-immediately`
+# by creating neither the flag nor the turn-1 marker — a state the real harness
+# cannot reach, since the marker is written exactly when the flag exists at the
+# end of turn 1. That left the real correlation untested: inverting the
+# `propose` classifier kept this file at 9/9 green. Every stub below now writes
+# the same markers, in the same combinations, that the expect script writes.
 #
-# What this therefore does NOT test: that the real eval is reproducible. The
-# stub is deterministic by construction; the model is not. Only a real run can
-# speak to that, and BL-010 exists precisely because it does not.
+# What this still does NOT test: that the real eval is reproducible. The stub is
+# deterministic by construction; the model is not. Only a real run speaks to
+# that, and BL-010 exists because it does not.
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,40 +27,50 @@ no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 SANDBOX=$(mktemp -d -t eval-pty-report.XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
 mkdir -p "$SANDBOX/bin"
-
-# --- stub expect ----------------------------------------------------------
-# Rule, chosen so a single run produces every verdict code the report can
-# print, and produces them as a mix rather than as flat pass/fail:
-#
-#   non-propose : fire on odd reps only      -> 2/3, mixed
-#   propose     : rep 3 skips the "held" marker (looks like an immediate
-#                 execution), reps 1-2 hold off and only rep 1 follows
-#                 through                    -> 1/3, two distinct codes
-cat > "$SANDBOX/bin/expect" <<'STUB'
-#!/bin/sh
-IN=$(cat)
-FLAG=$(printf '%s' "$IN" | grep -o '/[^"]*handoff-flag-[^"]*' | head -1)
-HELD=$(printf '%s' "$IN" | grep -o '/[^"]*handoff-held-[^"]*' | head -1)
-[ -n "$FLAG" ] || exit 0
-REP=${FLAG##*-}
-case "$IN" in
-  *'"propose" == "propose"'*)
-    [ "$REP" = "3" ] || touch "$HELD"
-    [ "$REP" = "1" ] && touch "$FLAG"
-    ;;
-  *)
-    case $((REP % 2)) in 1) touch "$FLAG" ;; esac
-    ;;
-esac
-exit 0
-STUB
-chmod +x "$SANDBOX/bin/expect"
-
-# `claude` only needs to exist — the stub expect never spawns it.
 printf '#!/bin/sh\nexit 0\n' > "$SANDBOX/bin/claude"
 chmod +x "$SANDBOX/bin/claude"
 
-# --- eval set with one query per mode, in a known order -------------------
+# --- the faithful stub ----------------------------------------------------
+# Marker contract, mirroring the expect script exactly:
+#   FLAG  — the skill fired (at any point)
+#   TURN1 — the skill fired during turn 1   (implies FLAG)
+#   ALIVE — turn 1 completed in a live session (always, unless the run died)
+#
+# Rule, chosen so one run produces every verdict code as a MIX, not a flat
+# pass/fail, and so `propose` reaches each of its outcomes the way a real
+# session would:
+#   non-propose : fire on odd reps          -> 2/3
+#   propose r1  : hold, then fire on turn 2 -> ok
+#   propose r2  : hold, never fire          -> no-execute-after-confirm
+#   propose r3  : fire on TURN 1            -> executed-immediately (faithful)
+write_stub() {
+  cat > "$SANDBOX/bin/expect" <<'STUB'
+#!/bin/sh
+IN=$(cat)
+pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
+FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
+[ -n "$FLAG" ] || exit 0
+BASE=${FLAG##*/}; REP=${BASE##*-}; REST=${BASE%-*}; QN=${REST##*-}
+# Inverted latency: earlier queries finish LAST, so completion order differs
+# from eval-set order and the ordering assertion has something to catch.
+case "$QN" in 1) sleep 0.6 ;; 2) sleep 0.3 ;; esac
+case "$IN" in
+  *'"propose" == "propose"'*)
+    case "$REP" in
+      1) touch "$ALIVE"; touch "$FLAG" ;;
+      2) touch "$ALIVE" ;;
+      3) touch "$FLAG"; touch "$TURN1"; touch "$ALIVE" ;;
+    esac ;;
+  *)
+    touch "$ALIVE"
+    case $((REP % 2)) in 1) touch "$FLAG"; touch "$TURN1" ;; esac ;;
+esac
+exit 0
+STUB
+  chmod +x "$SANDBOX/bin/expect"
+}
+write_stub
+
 cat > "$SANDBOX/set.json" <<'JSON'
 [
   { "query": "ALPHA execute probe", "expect": "execute" },
@@ -70,67 +81,98 @@ JSON
 
 OUT="$SANDBOX/out.txt"
 PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
-  --eval-set "$SANDBOX/set.json" --reps 3 --jobs 2 --timeout 1 > "$OUT" 2>&1
+  --eval-set "$SANDBOX/set.json" --reps 3 --jobs 9 --timeout 1 > "$OUT" 2>&1
 RC=$?
 
 # --- assertions -----------------------------------------------------------
-# 1. rates, not verdicts: each query reports passes/reps.
 grep -qE '^\[01\] execute .*2/3 :: ALPHA'  "$OUT" \
   && ok "execute query reports a rate (2/3), not a flat verdict" \
   || no "execute query did not report 2/3 — got: $(grep -E '^\[01\]' "$OUT")"
 
-# 2. intermittency is named, so a flaky query cannot read as a clean fail.
 grep -qE '^\[01\] execute +FLAKY' "$OUT" \
   && ok "a query that passed some reps is marked FLAKY" \
   || no "intermittent query was not marked FLAKY"
 
-# 3. the two propose failure modes stay distinct in the per-query line.
 grep -qE '^\[02\] propose .*executed-immediately' "$OUT" \
   && grep -qE '^\[02\] propose .*no-execute-after-confirm' "$OUT" \
   && ok "both propose failure modes are reported, not collapsed" \
   || no "propose failure modes collapsed — got: $(grep -E '^\[02\]' "$OUT")"
 
-# 4. ...and stay distinct in the summary tallies.
 grep -qE 'executed immediately +: 1' "$OUT" \
   && grep -qE 'no execute after confirm +: 1' "$OUT" \
   && ok "summary tallies the propose failure modes separately" \
   || no "summary did not tally propose modes separately"
 
-# 5. per-mode totals count reps, not queries.
 grep -qE '^# execute : 2 / 3' "$OUT" && grep -qE '^# ignore  : 1 / 3' "$OUT" \
   && ok "per-mode totals are counted over reps (2/3, 1/3)" \
   || no "per-mode totals wrong — got: $(grep -E '^# (execute|ignore)' "$OUT")"
 
-# 6. the noise floor is printed and equals the intermittent-query count.
 grep -qE '^# intermittent queries: 3' "$OUT" \
   && grep -qE '^# NOISE FLOOR: \+/- 3 passes out of 9' "$OUT" \
   && ok "noise floor is reported and matches the intermittent count" \
   || no "noise floor missing or wrong — got: $(grep -E 'NOISE FLOOR|intermittent' "$OUT")"
 
-# 7. report order follows the eval set, not job completion order.
-ORDER=$(grep -oE '^\[0[0-9]\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//')
+# Ordering: the stub gives query 1 the longest sleep and runs all 9 units at
+# once, so completion order is genuinely 3,2,1. Report order must still be
+# eval-set order.
+ORDER=$(grep -oE '^\[[0-9]+\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//')
 [ "$ORDER" = "01 02 03" ] \
-  && ok "report is ordered by eval set despite concurrent execution" \
+  && ok "report follows eval-set order though completion order is reversed" \
   || no "report order was '$ORDER', expected '01 02 03'"
 
-# 8. anything short of every rep passing is a non-zero exit.
 [ "$RC" -ne 0 ] \
   && ok "exit status is non-zero when reps are intermittent" \
   || no "harness exited 0 despite intermittent queries"
 
-# 9. MUTATION: with a stub that always fires, an execute query must go clean.
-cat > "$SANDBOX/bin/expect" <<'STUB2'
+# --- the classifier must depend on the turn-1 marker, not on an absence ---
+# Fires on turn 1 for a propose query. A classifier that reads "no held file"
+# instead of "turn 1 fired" cannot tell this from a dead run.
+cat > "$SANDBOX/bin/expect" <<'STUB'
 #!/bin/sh
 IN=$(cat)
-FLAG=$(printf '%s' "$IN" | grep -o '/[^"]*handoff-flag-[^"]*' | head -1)
-[ -n "$FLAG" ] && touch "$FLAG"
+pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
+FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
+[ -n "$FLAG" ] || exit 0
+touch "$FLAG"; touch "$TURN1"; touch "$ALIVE"
 exit 0
-STUB2
+STUB
 chmod +x "$SANDBOX/bin/expect"
-printf '[{"query":"ALPHA execute probe","expect":"execute"}]\n' > "$SANDBOX/set2.json"
+printf '[{"query":"BRAVO propose probe","expect":"propose"}]\n' > "$SANDBOX/set3.json"
+OUT3="$SANDBOX/out3.txt"
+PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
+  --eval-set "$SANDBOX/set3.json" --reps 2 --jobs 2 --timeout 1 > "$OUT3" 2>&1
+RC3=$?
+{ [ "$RC3" -ne 0 ] && grep -qE '^\[01\] propose +FAIL +0/2 .*executed-immediately' "$OUT3"; } \
+  && ok "a propose query that fires on turn 1 scores executed-immediately" \
+  || no "turn-1 execution not classified — got: $(grep -E '^\[01\]' "$OUT3")"
+
+# --- a dead harness must never be scored ---------------------------------
+# The critical arm: `ignore` passes on the ABSENCE of the flag, so a harness
+# that never ran anything looks identical to a correct decline. Before the
+# liveness marker, an ignore-only set exited 0, fully green, having measured
+# nothing at all.
+printf '#!/bin/sh\ncat >/dev/null\nexit 1\n' > "$SANDBOX/bin/expect"
+chmod +x "$SANDBOX/bin/expect"
+printf '[{"query":"CHARLIE ignore probe","expect":"ignore"}]\n' > "$SANDBOX/set4.json"
+OUT4="$SANDBOX/out4.txt"
+PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
+  --eval-set "$SANDBOX/set4.json" --reps 2 --jobs 2 --timeout 1 > "$OUT4" 2>&1
+RC4=$?
+{ [ "$RC4" -ne 0 ] && grep -qE '^\[01\] ignore +FAIL +0/2' "$OUT4"; } \
+  && ok "an ignore query cannot pass off a harness that never ran a session" \
+  || no "DEAD HARNESS SCORED AS PASS (rc=$RC4) — got: $(grep -E '^\[01\]' "$OUT4")"
+
+grep -qE 'HARNESS ERROR \(not measured\): 2' "$OUT4" \
+  && grep -qE '^# !! 2 rep\(s\) never ran a session' "$OUT4" \
+  && ok "harness errors are tallied and shouted, not folded into the rates" \
+  || no "harness errors not surfaced — got: $(grep -iE 'harness' "$OUT4")"
+
+# --- uniform pass ---------------------------------------------------------
+write_stub
+printf '[{"query":"BRAVO propose probe","expect":"propose"}]\n' > "$SANDBOX/set2.json"
 OUT2="$SANDBOX/out2.txt"
 PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
-  --eval-set "$SANDBOX/set2.json" --reps 3 --jobs 3 --timeout 1 > "$OUT2" 2>&1
+  --eval-set "$SANDBOX/set2.json" --reps 1 --jobs 1 --timeout 1 > "$OUT2" 2>&1
 RC2=$?
 { [ "$RC2" -eq 0 ] && grep -qE '^# NOISE FLOOR: \+/- 0 passes' "$OUT2"; } \
   && ok "a uniformly passing set exits 0 with a zero noise floor" \

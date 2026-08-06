@@ -39,14 +39,33 @@ mandated|\*\*Mandated by a running process
 donot|\*\*Do NOT use\*\*'
 
 # --- extract the two regions ----------------------------------------------
-# when_to_use: a YAML block scalar — everything indented under the key, up to
-# the next top-level key or the closing front-matter fence. Only the budget
-# check reads it now; nothing cross-checks its prose against the body.
-WTU=$(awk '
-  /^when_to_use:/ { inblock = 1; next }
-  inblock && (/^[a-zA-Z_-]+:/ || /^---[[:space:]]*$/) { inblock = 0 }
-  inblock { print }
-' "$SKILL")
+# field_of FILE KEY — the value of a front-matter key, whether it is written
+# as an inline scalar (`key: text`) or as a block scalar (`key: |` + indented
+# lines). Both spellings are legal YAML and mean the same thing to Claude Code,
+# so a check that only understands one of them is not a check.
+#
+# That is not hypothetical. An earlier version read `description` with
+# `sed -n 's/^description:[[:space:]]*//p'`, which returns the bare `|` when the
+# field is a block scalar. Reformatting `description` to block style and adding
+# ~640 chars moved the REAL listing to 1878 chars — past the ~1535 cut — while
+# this guard reported 914 and passed. The budget check silently measured
+# nothing, which is the exact failure it exists to prevent.
+field_of() {
+  awk -v key="$2" '
+    index($0, key ":") == 1 {
+      inblock = 1
+      line = $0
+      sub("^" key ":[[:space:]]*", "", line)
+      # `|`, `>`, `|-`, `>-` are block indicators, not content.
+      if (line != "" && line !~ /^[|>][-+]?[0-9]*$/) print line
+      next
+    }
+    inblock && (/^[a-zA-Z_-]+:/ || /^---[[:space:]]*$/) { inblock = 0 }
+    inblock { print }
+  ' "$1"
+}
+
+WTU=$(field_of "$SKILL" when_to_use)
 
 # body: the "## When to use this skill" section, up to the next H2.
 BODY=$(awk '
@@ -111,14 +130,43 @@ fi
 # Either result is >= the true character count, so this check can never let an
 # over-budget front-matter pass — at worst it over-reports.
 BUDGET=1450
-DESC=$(sed -n 's/^description:[[:space:]]*//p' "$SKILL" | head -1)
-WTU_TEXT=$(printf '%s\n' "$WTU" | sed 's/^[[:space:]]*//')
-LISTING_LEN=$(printf '%s%s' "$DESC" "$WTU_TEXT" | wc -m | tr -d '[:space:]')
+DESC=$(field_of "$SKILL" description)
+
+# Both fields must be non-empty. An extractor that silently returns nothing
+# measures 0 chars and passes any budget — a vacuous guard is worse than none,
+# because it reports success.
+[ -n "$DESC" ] || no "could not extract the description field"
+
+measure() { printf '%s%s' "$1" "$(printf '%s\n' "$2" | sed 's/^[[:space:]]*//')" | wc -m | tr -d '[:space:]'; }
+LISTING_LEN=$(measure "$DESC" "$WTU")
 
 if [ "$LISTING_LEN" -le "$BUDGET" ]; then
   ok "description + when_to_use is $LISTING_LEN chars (budget $BUDGET, observed cut ~1535)"
 else
   no "description + when_to_use is $LISTING_LEN chars, over the $BUDGET budget — the listing truncates tail-first and the 'Do NOT use' exclusions are what falls off"
+fi
+
+# --- 4. the extractor survives a block-scalar reformat --------------------
+# Check 3 is only as good as field_of. This runs it against a fixture whose
+# `description` is block-style and whose true length is known, so a regression
+# to a line-oriented extractor fails here instead of silently passing check 3.
+FIXTURE="${TMPDIR:-/tmp}/skill-consistency-fixture.$$.md"
+PAD=$(: ; i=0; while [ $i -lt 40 ]; do printf 'padding '; i=$((i+1)); done)
+{
+  printf -- '---\n'
+  printf 'name: fixture\n'
+  printf 'description: |\n  %s\n' "$PAD"
+  printf 'when_to_use: |\n  %s\n' "$PAD"
+  printf -- '---\n'
+} > "$FIXTURE"
+# 40 * 8 chars = 320 per field, both block scalars.
+FIX_LEN=$(measure "$(field_of "$FIXTURE" description)" "$(field_of "$FIXTURE" when_to_use)")
+rm -f "$FIXTURE"
+
+if [ "$FIX_LEN" -ge 600 ]; then
+  ok "field_of reads block-scalar fields (fixture measured $FIX_LEN chars)"
+else
+  no "field_of collapsed a block-scalar field: fixture measured $FIX_LEN chars, expected ~640 — the budget check would silently measure nothing"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
