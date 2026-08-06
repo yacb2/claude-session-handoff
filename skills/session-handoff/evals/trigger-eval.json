@@ -61,7 +61,8 @@
   },
   {
     "query": "necesito recargar los hooks nuevos que metí en settings.json (los de pre-commit) pero quiero seguir donde estoy con el bug del CORS",
-    "expect": "propose"
+    "expect": "propose",
+    "why": "Proactive situation, only reported. The lone first-person want is aimed at the work (the CORS bug), not at the move — description, so propose."
   },
   {
     "query": "/clear",
@@ -69,7 +70,8 @@
   },
   {
     "query": "borrá todo lo de esta conversación y empezamos de cero, no necesito ningún contexto",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "Do NOT use is checked before the tie-break: a plain imperative, but what it asks for is /clear."
   },
   {
     "query": "wipe the conversation history please, I want a clean slate, not carrying anything over",
@@ -77,11 +79,13 @@
   },
   {
     "query": "reinicia el servidor de Django, está colgado en localhost:8000 y no responde",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "Restarting something that is not the Claude Code session."
   },
   {
     "query": "restart docker compose, the postgres container is stuck and migrations are failing",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "Restarting something that is not the Claude Code session."
   },
   {
     "query": "hand off this task to the code-reviewer subagent, I want it to look at the diff in src/billing/",
@@ -93,11 +97,13 @@
   },
   {
     "query": "what does /compact actually do? is it the same as /clear?",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "A question about what /compact and /clear do — answer it, do not act on it."
   },
   {
     "query": "explain the difference between /compact, /clear and --resume in Claude Code please",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "A question about what /compact, /clear and --resume do — answer it, do not act on it."
   },
   {
     "query": "dame un prompt corto para describir esta tarea en el issue tracker",
@@ -121,7 +127,8 @@
   },
   {
     "query": "transferí el ticket a Maria, ya lo está revisando — ¿algo más que falte de mi parte?",
-    "expect": "ignore"
+    "expect": "ignore",
+    "why": "Proactive situation, asked in interrogative form ('podemos ...?') — the situation sets the subject, the asking sets the verdict."
   },
   {
     "query": "abre una sesión nueva de tmux por favor, esta se quedó pegada en el ssh al staging",
@@ -129,6 +136,7 @@
   },
   {
     "query": "Phase 3 of the plan is done and we're near the context limit; the plan's own next step is to hand off before phase 4 — go ahead and do it.",
-    "expect": "execute"
+    "expect": "execute",
+    "why": "Restarting something that is not the Claude Code session (a tmux pane)."
   }
 ]
