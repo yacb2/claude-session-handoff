@@ -201,6 +201,52 @@ assert "wrapper byte-identical across repos" \
 assert "both declare the same version" \
   '[ "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_HANDOFF/scripts/claude-wrapper.sh")" = "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_RESTART/scripts/claude-wrapper.sh")" ]'
 
+# --- Case 10: the SessionStart hook is scoped to `startup` ---
+# Registered with no matcher, the group activates on every SessionStart reason —
+# startup, resume, clear, compact and fork — so the hook runs, and CONSUMES the
+# payload, on a /clear or /compact too. The matcher vocabulary is the documented
+# one, not a guess: startup | resume | clear | compact | fork, and an omitted
+# matcher means all of them.
+#
+# The handoff always launches a fresh process (never --resume), so `startup` is
+# the only reason that can carry a payload.
+echo "Case 10: SessionStart is scoped, UserPromptSubmit is not"
+new_sandbox case10
+run_handoff
+SETTINGS="$CLAUDE_DIR/settings.json"
+assert "SessionStart hook carries matcher=startup" \
+  'jq -e "(.hooks.SessionStart // []) | any((.matcher == \"startup\") and (.hooks | any(.command | test(\"handoff-session-start\"))))" "$SETTINGS" >/dev/null'
+assert "no unscoped group holds the SessionStart hook" \
+  'jq -e "(.hooks.SessionStart // []) | any((.matcher == null) and (.hooks | any(.command | test(\"handoff-session-start\")))) | not" "$SETTINGS" >/dev/null'
+# UserPromptSubmit has no session-start reason to filter on, so it stays unscoped.
+assert "UserPromptSubmit hook stays unscoped" \
+  'jq -e "(.hooks.UserPromptSubmit // []) | any((.matcher == null) and (.hooks | any(.command | test(\"handoff-prompt-hook\"))))" "$SETTINGS" >/dev/null'
+
+# Migration: an install that predates the matcher left the hook unscoped, and
+# the old idempotency check (a bare grep for the command anywhere in the file)
+# would see it and skip — so the fix would never reach anyone already installed.
+echo "Case 10b: an existing unscoped registration is migrated"
+new_sandbox case10b
+cat > "$CLAUDE_DIR/settings.json" << 'EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/scripts/handoff-session-start.sh" }
+        ]
+      }
+    ]
+  }
+}
+EOF
+run_handoff
+SETTINGS="$CLAUDE_DIR/settings.json"
+assert "10b unscoped registration gained the matcher" \
+  'jq -e "(.hooks.SessionStart // []) | any((.matcher == \"startup\") and (.hooks | any(.command | test(\"handoff-session-start\"))))" "$SETTINGS" >/dev/null'
+assert "10b the hook is registered exactly once" \
+  '[ "$(jq "[.hooks.SessionStart[]?.hooks[]? | select(.command | test(\"handoff-session-start\"))] | length" "$SETTINGS")" -eq 1 ]'
+
 echo ""
 echo "Summary: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]

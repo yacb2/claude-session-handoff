@@ -396,20 +396,45 @@ settings_apply() {
   fi
 }
 
+# True when CMD ($2) is already registered under event $1 with matcher $3
+# ("" meaning no matcher). Scoped to the event and the matcher, unlike the bare
+# `grep "$CMD" settings.json` this replaces — that matched anywhere in the file,
+# so a command registered under one event suppressed its registration under
+# another, and any incidental occurrence of the string counted as a hit.
+hook_registered() {
+  jq -e --arg ev "$1" --arg cmd "$2" --arg m "$3" '
+    (.hooks[$ev] // []) | any(((.matcher // "") == $m) and (.hooks | any(.command == $cmd)))
+  ' "$SETTINGS_FILE" >/dev/null 2>&1
+}
+
+# add_hook EVENT COMMAND [MATCHER]
+#
+# MATCHER scopes the group. SessionStart fires for startup, resume, clear,
+# compact and fork, and an omitted matcher activates the group on ALL of them —
+# which for a hook that consumes a payload means consuming it on /clear and
+# /compact too.
+#
+# Registering is remove-then-append rather than plain append, so an install
+# predating the matcher is MIGRATED rather than left alone: the old idempotency
+# test saw the stale unscoped entry and skipped, which would have kept the fix
+# from ever reaching an existing install. Removal is per-hook, so an unrelated
+# hook sharing the group survives.
 add_hook() {
-  EVENT="$1"; CMD="$2"
+  EVENT="$1"; CMD="$2"; MATCHER="${3:-}"
   ensure_settings
-  if grep -q "$CMD" "$SETTINGS_FILE"; then
+  if hook_registered "$EVENT" "$CMD" "$MATCHER"; then
     info "$EVENT hook '$CMD' already configured (skipped)"
     return
   fi
-  if jq -e ".hooks.$EVENT" "$SETTINGS_FILE" >/dev/null 2>&1; then
-    settings_apply --arg cmd "$CMD" --arg ev "$EVENT" '.hooks[$ev] += [{"hooks":[{"type":"command","command":$cmd}]}]'
-  elif jq -e '.hooks' "$SETTINGS_FILE" >/dev/null 2>&1; then
-    settings_apply --arg cmd "$CMD" --arg ev "$EVENT" '.hooks[$ev] = [{"hooks":[{"type":"command","command":$cmd}]}]'
-  else
-    settings_apply --arg cmd "$CMD" --arg ev "$EVENT" '. + {"hooks": {($ev): [{"hooks":[{"type":"command","command":$cmd}]}]}}'
-  fi
+  settings_apply --arg cmd "$CMD" --arg ev "$EVENT" --arg m "$MATCHER" '
+    .hooks = ((.hooks // {}) | .[$ev] = (
+      ((.[$ev] // [])
+        | map(.hooks |= map(select(.command != $cmd)))
+        | map(select((.hooks | length) > 0)))
+      + [ (if $m == "" then {} else {matcher: $m} end)
+          + {hooks: [{type: "command", command: $cmd}]} ]
+    ))
+  '
   info "$EVENT hook '$CMD' added"
 }
 
@@ -469,7 +494,11 @@ install() {
     fi
   fi
 
-  add_hook SessionStart "~/.claude/scripts/handoff-session-start.sh"
+  # Scoped to `startup`: the handoff always launches a fresh process, never
+  # --resume, so that is the only reason that can carry a payload. Left
+  # unscoped, the hook also ran — and consumed the payload — on clear, compact,
+  # resume and fork. UserPromptSubmit has no such reason to filter on.
+  add_hook SessionStart "~/.claude/scripts/handoff-session-start.sh" startup
   add_hook UserPromptSubmit "~/.claude/scripts/handoff-prompt-hook.sh"
 
   echo ""
