@@ -227,13 +227,16 @@ assert "UserPromptSubmit hook stays unscoped" \
 # would see it and skip — so the fix would never reach anyone already installed.
 echo "Case 10b: an existing unscoped registration is migrated"
 new_sandbox case10b
-cat > "$CLAUDE_DIR/settings.json" << 'EOF'
+# The seeded command must be the exact string this installer would write —
+# migration matches on the command, and CLAUDE_DIR here is a sandbox outside
+# $HOME, so that string is absolute rather than `~/.claude/...`.
+cat > "$CLAUDE_DIR/settings.json" << EOF
 {
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "~/.claude/scripts/handoff-session-start.sh" }
+          { "type": "command", "command": "$CLAUDE_DIR/scripts/handoff-session-start.sh" }
         ]
       }
     ]

@@ -42,6 +42,21 @@ LEGACY_MARKER_END="# claude-session-handoff: end"
 SHARED_MARKER_START="# claude-wrapper: start"
 SHARED_MARKER_END="# claude-wrapper: end"
 
+# How CLAUDE_DIR must appear INSIDE the files this installer generates — the rc
+# block's `claude()` function and the hook commands in settings.json.
+#
+# Those two hardcoded `~/.claude` while the files were copied to $CLAUDE_DIR, so
+# `CLAUDE_DIR=/opt/claude ./install.sh` reported an all-green install and left a
+# `claude` function pointing at a wrapper that is not there.
+#
+# Kept $HOME-relative when CLAUDE_DIR lives under $HOME: a dotfiles-managed rc
+# is synced across machines, and baking an absolute home into it breaks the next
+# one. Absolute only when CLAUDE_DIR genuinely points elsewhere.
+case "$CLAUDE_DIR" in
+  "$HOME"/*) CLAUDE_REF="~${CLAUDE_DIR#$HOME}" ;;
+  *)         CLAUDE_REF="$CLAUDE_DIR" ;;
+esac
+
 info() { echo "  [+] $1"; }
 warn() { echo "  [!] $1"; }
 error() { echo "  [x] $1" >&2; exit 1; }
@@ -210,7 +225,7 @@ $SHARED_MARKER_START
 # See: https://github.com/yacb2/claude-restart
 # See: https://github.com/yoelacevedo/claude-session-handoff
 claude() {
-  ~/.claude/scripts/claude-wrapper.sh "\$@"
+  $CLAUDE_REF/scripts/claude-wrapper.sh "\$@"
 }
 $SHARED_MARKER_END
 SHARED_BLOCK
@@ -283,9 +298,12 @@ rc_block_unregister() {
 # --- Fish equivalents ---
 
 fish_register() {
-  FISH_DIR="$HOME/.config/fish/functions"
-  FISH_FILE="$FISH_DIR/claude.fish"
-  mkdir -p "$FISH_DIR"
+  # $RC_FILE, not a hardcoded path: detect_shell already resolved it and honours
+  # RC_FILE_OVERRIDE. Hardcoding meant every other path respected the sandbox
+  # overrides while this one wrote to the developer's real fish config — inert
+  # only for as long as no test set SHELL_NAME_OVERRIDE=fish.
+  FISH_FILE="$RC_FILE"
+  mkdir -p "$(dirname "$FISH_FILE")"
 
   if [ -f "$FISH_FILE" ] && grep -q "$SHARED_MARKER_START" "$FISH_FILE" 2>/dev/null; then
     REG_LINE=$(grep '^# registered-by:' "$FISH_FILE" | head -1)
@@ -316,7 +334,7 @@ $SHARED_MARKER_START
 # registered-by: $TOOL_NAME
 # Shared wrapper for claude-restart and claude-session-handoff.
 function claude
-  ~/.claude/scripts/claude-wrapper.sh \$argv
+  $CLAUDE_REF/scripts/claude-wrapper.sh \$argv
 end
 $SHARED_MARKER_END
 FISH_FUNC
@@ -324,7 +342,7 @@ FISH_FUNC
 }
 
 fish_unregister() {
-  FISH_FILE="$HOME/.config/fish/functions/claude.fish"
+  FISH_FILE="$RC_FILE"
   [ -f "$FISH_FILE" ] || return 0
   grep -q "$SHARED_MARKER_START" "$FISH_FILE" 2>/dev/null || return 0
 
@@ -498,8 +516,8 @@ install() {
   # --resume, so that is the only reason that can carry a payload. Left
   # unscoped, the hook also ran — and consumed the payload — on clear, compact,
   # resume and fork. UserPromptSubmit has no such reason to filter on.
-  add_hook SessionStart "~/.claude/scripts/handoff-session-start.sh" startup
-  add_hook UserPromptSubmit "~/.claude/scripts/handoff-prompt-hook.sh"
+  add_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh" startup
+  add_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
 
   echo ""
   echo "  Done! Open a new terminal and run 'claude' to start."
@@ -538,8 +556,8 @@ uninstall() {
     fi
   fi
 
-  remove_hook SessionStart "~/.claude/scripts/handoff-session-start.sh"
-  remove_hook UserPromptSubmit "~/.claude/scripts/handoff-prompt-hook.sh"
+  remove_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh"
+  remove_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
 
   # Remove shared wrapper only if no other tool registered.
   if [ -f "$WRAPPER_PATH" ] && [ -n "$RC_FILE" ] && [ -f "$RC_FILE" ]; then
