@@ -32,5 +32,45 @@
     "query": "我想在新会话里继续，但保留我们当前关于数据库迁移的计划",
     "expect": "execute",
     "why": "First-person want aimed at the session move itself, with no question and no imperative — asking, so execute."
+  },
+  {
+    "query": "diese Session wird langsam unübersichtlich, wir hängen schon ewig am Auth-Refactor",
+    "expect": "propose",
+    "why": "Describes a state, no ask and no first-person want for the move — soft signal."
+  },
+  {
+    "query": "credo che /compact fallirà di nuovo con questa sessione così lunga — c'è un altro modo per continuare puliti senza perdere il piano della migrazione?",
+    "expect": "propose",
+    "why": "Asks for OPTIONS rather than for the handoff, inside a Proactive situation. Describing, not asking."
+  },
+  {
+    "query": "この会話、そろそろ長くなりすぎた気がする",
+    "expect": "propose",
+    "why": "Hedged opinion about the conversation's state — soft signal, not a request."
+  },
+  {
+    "query": "我觉得这个对话有点太长了，有点乱",
+    "expect": "propose",
+    "why": "Hedged opinion — soft signal. The want, if any, is about the conversation, not about moving."
+  },
+  {
+    "query": "lösch bitte den kompletten Verlauf, ich fange neu an und brauche nichts davon",
+    "expect": "ignore",
+    "why": "A /clear request: no context preserved. Do NOT use wins over the imperative."
+  },
+  {
+    "query": "riavvia il server di sviluppo, è bloccato sulla porta 8000 e non risponde",
+    "expect": "ignore",
+    "why": "Restarting something that is not the Claude Code session."
+  },
+  {
+    "query": "/compact と /clear の違いを教えてください",
+    "expect": "ignore",
+    "why": "A question about what /compact and /clear do — answer it, do not act on it."
+  },
+  {
+    "query": "重启一下 docker，postgres 容器卡住了，迁移一直失败",
+    "expect": "ignore",
+    "why": "Restarting something that is not the Claude Code session."
   }
 ]
