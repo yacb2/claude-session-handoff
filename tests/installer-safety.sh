@@ -11,6 +11,8 @@
 #   A. An unterminated marker block must not delete the rc file to EOF,
 #      and no rc rewrite proceeds without a .bak.
 #   B. Uninstall must not delete unrelated hooks that share a matcher group.
+#   C. A jq failure must not be reported as success, and uninstall must
+#      require jq rather than claiming it removed hooks it left registered.
 #
 # Usage: ./tests/installer-safety.sh
 
@@ -51,9 +53,10 @@ run_installer() {
   esac
   shift
   STATUS=0
-  OUT=$( cd "$IDIR" && ./install.sh "$@" 2>&1 ) || STATUS=$?
+  OUT=$( PATH="${PATH_OVERRIDE:-$PATH}"; export PATH; cd "$IDIR" && ./install.sh "$@" 2>&1 ) || STATUS=$?
   return "$STATUS"
 }
+PATH_OVERRIDE=""
 
 tool_name() {
   case "$1" in
@@ -233,6 +236,91 @@ EOF
   run_installer "$TOOL" --uninstall
   assert "B2 SessionStart key removed when nothing remains" \
     'jq -e "(.hooks.SessionStart // []) | length == 0" "$CLAUDE_DIR/settings.json" >/dev/null'
+done
+
+# ---------------------------------------------------------------------------
+# Case C: a jq that fails, and a machine with no jq at all
+#
+# `jq … > "$TMP" && mv …` is an AND-list, and `set -e` does not fire on those
+# (verified in sh and dash), so the following `info "… added"` ran regardless.
+# A settings.json jq cannot parse produced a parse error, then
+# `[+] SessionStart hook added`, then `Done!`, exit 0 — nothing registered and
+# the tool permanently mute. uninstall() additionally never checked for jq, so
+# on a jq-less machine it reported both hooks removed while leaving them
+# registered, pointing at scripts it had just deleted.
+# ---------------------------------------------------------------------------
+
+REAL_JQ=$(command -v jq)
+
+# A PATH holding everything the installer needs EXCEPT jq. Built by symlinking
+# an explicit allow-list: a sandbox missing an ordinary tool manufactures false
+# greens (a payload once "survived" only because cleanup crashed), so C2 pairs
+# this with a control positive that adds jq back and must succeed.
+make_stripped_path() {
+  SPATH="$1"
+  mkdir -p "$SPATH"
+  for T in awk grep sed cat cp mv rm chmod mkdir touch basename dirname cmp ls env sh; do
+    TP=$(command -v "$T" 2>/dev/null) && ln -sf "$TP" "$SPATH/$T"
+  done
+}
+
+for TOOL in handoff restart; do
+  echo "Case C ($TOOL): jq failures are not success"
+
+  # C1 — jq exists but fails on the settings.json mutation
+  new_sandbox "caseC1-$TOOL"
+  STUB_DIR="$SB/stub-bin"
+  mkdir -p "$STUB_DIR"
+  cat > "$STUB_DIR/jq" << EOF
+#!/bin/sh
+# Fail every settings.json mutation, pass every probe through. The mutations
+# are exactly the calls that bind --arg cmd; the probes never do.
+case "\$*" in
+  *'--arg cmd'*) exit 1 ;;
+esac
+exec "$REAL_JQ" "\$@"
+EOF
+  chmod +x "$STUB_DIR/jq"
+  PATH_OVERRIDE="$STUB_DIR:$PATH"
+  C1_STATUS=0
+  run_installer "$TOOL" || C1_STATUS=$?
+  PATH_OVERRIDE=""
+  assert "C1 install fails when jq fails"             '[ "$C1_STATUS" -ne 0 ]'
+  assert "C1 does not claim the hook was added"       '! echo "$OUT" | grep -q "hook .* added"'
+  assert "C1 does not print Done!"                    '! echo "$OUT" | grep -q "Done!"'
+  assert "C1 leaves no .tmp turd next to settings"    '[ ! -e "$CLAUDE_DIR/settings.json.tmp" ]'
+
+  # C2 — no jq on PATH at all, on the uninstall path
+  new_sandbox "caseC2-$TOOL"
+  run_installer "$TOOL"
+  cp "$CLAUDE_DIR/settings.json" "$SB/settings-before"
+  STRIPPED="$SB/nojq-bin"
+  make_stripped_path "$STRIPPED"
+
+  # Control positive: the same stripped PATH *with* jq must uninstall cleanly.
+  # If this fails, C2's result says nothing about jq detection.
+  ln -sf "$REAL_JQ" "$STRIPPED/jq"
+  PATH_OVERRIDE="$STRIPPED"
+  CTRL_STATUS=0
+  run_installer "$TOOL" --uninstall || CTRL_STATUS=$?
+  PATH_OVERRIDE=""
+  assert "C2 control: stripped PATH with jq uninstalls cleanly" '[ "$CTRL_STATUS" -eq 0 ]'
+  assert "C2 control: the hook really was removed" \
+    '! grep -q "$(basename "$(session_start_hook "$TOOL")")" "$CLAUDE_DIR/settings.json"'
+
+  # Now the real arm: same PATH, jq removed.
+  new_sandbox "caseC2b-$TOOL"
+  run_installer "$TOOL"
+  cp "$CLAUDE_DIR/settings.json" "$SB/settings-before"
+  rm -f "$STRIPPED/jq"
+  PATH_OVERRIDE="$STRIPPED"
+  C2_STATUS=0
+  run_installer "$TOOL" --uninstall || C2_STATUS=$?
+  PATH_OVERRIDE=""
+  assert "C2 uninstall fails when jq is missing"      '[ "$C2_STATUS" -ne 0 ]'
+  assert "C2 does not claim hooks were removed"       '! echo "$OUT" | grep -q "hook .* removed"'
+  assert "C2 settings.json is untouched"              'cmp -s "$CLAUDE_DIR/settings.json" "$SB/settings-before"'
+  assert "C2 the hook scripts are still on disk"      '[ -f "$CLAUDE_DIR/scripts/$(basename "$(session_start_hook "$TOOL")")" ]'
 done
 
 echo ""
