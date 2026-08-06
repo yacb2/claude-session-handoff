@@ -13,6 +13,8 @@
 #   B. Uninstall must not delete unrelated hooks that share a matcher group.
 #   C. A jq failure must not be reported as success, and uninstall must
 #      require jq rather than claiming it removed hooks it left registered.
+#   D. An empty settings.json must be seeded, and a non-empty one that is not
+#      a JSON object must never be clobbered.
 #
 # Usage: ./tests/installer-safety.sh
 
@@ -321,6 +323,64 @@ EOF
   assert "C2 does not claim hooks were removed"       '! echo "$OUT" | grep -q "hook .* removed"'
   assert "C2 settings.json is untouched"              'cmp -s "$CLAUDE_DIR/settings.json" "$SB/settings-before"'
   assert "C2 the hook scripts are still on disk"      '[ -f "$CLAUDE_DIR/scripts/$(basename "$(session_start_hook "$TOOL")")" ]'
+done
+
+# ---------------------------------------------------------------------------
+# Case D: empty vs. malformed settings.json
+#
+# ensure_settings only seeded `{}` when the file was ABSENT. On empty input
+# `jq '. + {…}'` exits 0 with empty output, so `mv` installed the empty file and
+# the installer reported success — distinct from Case C, since here jq succeeds
+# and an exit-code check alone does not catch it.
+#
+# The mirror-image risk is seeding `{}` over a settings.json that failed to
+# parse: that is the user's config, and overwriting it is worse than the bug
+# being fixed. Only jq's exit 4 (no output at all) means "safe to seed"; 5
+# (parse error) and 1 (valid JSON, wrong type) mean real content.
+# ---------------------------------------------------------------------------
+
+for TOOL in handoff restart; do
+  echo "Case D ($TOOL): empty settings.json is seeded, malformed is preserved"
+  HOOK_BASENAME=$(basename "$(session_start_hook "$TOOL")")
+
+  # D1 — zero-byte file
+  new_sandbox "caseD1-$TOOL"
+  : > "$CLAUDE_DIR/settings.json"
+  run_installer "$TOOL"
+  assert "D1 settings.json is a JSON object"          'jq -e "type == \"object\"" "$CLAUDE_DIR/settings.json" >/dev/null'
+  assert "D1 the SessionStart hook got registered"    'grep -q "$HOOK_BASENAME" "$CLAUDE_DIR/settings.json"'
+
+  # D2 — whitespace only, which jq also treats as no input
+  new_sandbox "caseD2-$TOOL"
+  printf '\n   \n' > "$CLAUDE_DIR/settings.json"
+  run_installer "$TOOL"
+  assert "D2 settings.json is a JSON object"          'jq -e "type == \"object\"" "$CLAUDE_DIR/settings.json" >/dev/null'
+  assert "D2 the SessionStart hook got registered"    'grep -q "$HOOK_BASENAME" "$CLAUDE_DIR/settings.json"'
+
+  # D3 — unparseable but real: a JSONC-style comment the user put there
+  new_sandbox "caseD3-$TOOL"
+  cat > "$CLAUDE_DIR/settings.json" << 'EOF'
+{
+  // jq cannot parse this, but it is still the user's config
+  "model": "opus",
+  "hooks": {}
+}
+EOF
+  cp "$CLAUDE_DIR/settings.json" "$SB/settings-before"
+  D3_STATUS=0
+  run_installer "$TOOL" || D3_STATUS=$?
+  assert "D3 install fails on unparseable settings"   '[ "$D3_STATUS" -ne 0 ]'
+  assert "D3 settings.json is left byte-identical"    'cmp -s "$CLAUDE_DIR/settings.json" "$SB/settings-before"'
+  assert "D3 does not print Done!"                    '! echo "$OUT" | grep -q "Done!"'
+
+  # D4 — valid JSON, wrong type. jq exits 1 here, not 4; seeding would drop it.
+  new_sandbox "caseD4-$TOOL"
+  printf '["not", "an", "object"]\n' > "$CLAUDE_DIR/settings.json"
+  cp "$CLAUDE_DIR/settings.json" "$SB/settings-before"
+  D4_STATUS=0
+  run_installer "$TOOL" || D4_STATUS=$?
+  assert "D4 install fails on a non-object settings"  '[ "$D4_STATUS" -ne 0 ]'
+  assert "D4 settings.json is left byte-identical"    'cmp -s "$CLAUDE_DIR/settings.json" "$SB/settings-before"'
 done
 
 echo ""
