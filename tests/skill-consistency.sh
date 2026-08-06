@@ -34,6 +34,7 @@ no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 CASES='direct|\*\*Direct trigger
 proactive|\*\*Proactive trigger
 soft|\*\*Soft signal
+promptask|\*\*Asked for the prompt
 tiebreak|\*\*Tie-break
 mandated|\*\*Mandated by a running process
 donot|\*\*Do NOT use\*\*'

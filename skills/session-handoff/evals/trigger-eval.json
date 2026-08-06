@@ -17,7 +17,8 @@
   },
   {
     "query": "dame un prompt para iniciar una nueva sesión con este contexto. Llevamos largo y quiero seguir en limpio sin perder donde estamos del refactor del auth",
-    "expect": "execute"
+    "expect": "propose",
+    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md"
   },
   {
     "query": "inicia una nueva sesión limpia para continuar con el siguiente punto del plan, ya cerramos la fase de wrapper unificado y toca arrancar con el smoke test del skill",
@@ -29,7 +30,8 @@
   },
   {
     "query": "dame el prompt para arrancar la fase 2 en una sesión nueva, ya quedó cerrada la fase 1",
-    "expect": "execute"
+    "expect": "propose",
+    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md"
   },
   {
     "query": "the conversation is getting massive, can you hand this off to a fresh session? we're mid-way through refactoring the auth middleware in src/auth/middleware.ts and there are 3 failing tests we still need to fix",
@@ -45,7 +47,8 @@
   },
   {
     "query": "give me a prompt I can paste into a new session to keep going with the plan, we just finished phase 1 of the migration",
-    "expect": "execute"
+    "expect": "propose",
+    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md"
   },
   {
     "query": "faça um handoff disso aqui? a sessão tá muito longa e quero recarregar os hooks novos que acabei de instalar do plugin de boilerplate-sync",

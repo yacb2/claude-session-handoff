@@ -16,7 +16,7 @@ This skill closes the current Claude Code session and opens a new one with a han
 
 The front-matter only routes — it decides whether this skill gets surfaced at all. This section is what decides whether to *execute* or to *propose*, and it is authoritative. Do not act on the always-loaded listing alone: the handoff is six lines of Bash and is easy to fire straight from a description, which is exactly how the wrong case gets run.
 
-**Direct trigger — execute immediately.** The user explicitly asks for a handoff: hand off this session, start a new session keeping context, restart preserving context, give me a prompt to continue in a new session, next phase of the plan in a clean session. Claude handles the user's intent across any language they write in; no need to enumerate translations.
+**Direct trigger — execute immediately.** The user explicitly asks for a handoff: hand off this session, start a new session keeping context, restart preserving context, next phase of the plan in a clean session. Claude handles the user's intent across any language they write in; no need to enumerate translations.
 
 **Proactive trigger — suggest, then execute on confirmation.** Recommend a handoff (and ask before running it) when:
 - The user runs or mentions `/compact` and the conversation is already large.
@@ -24,6 +24,10 @@ The front-matter only routes — it decides whether this skill gets surfaced at 
 - The user wants to reload hooks, skills, MCP servers, or pick up a new Claude Code binary version.
 
 **Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly — propose it, summarize what would be seeded, and confirm before running. In practice: a one-line proposal naming what would be seeded (current goal + open thread), then ask if they want it triggered. Only execute after they confirm.
+
+**Asked for the prompt, not for the move — draft it, then offer.** When the user asks for *a prompt* to continue in a new session — "dame un prompt para iniciar una nueva sesión con este contexto", "give me a prompt I can paste into a new session" — what the words request is **text**. Produce it: write the handoff prompt **in the reply, never as a file on disk**, then offer to fire it and execute only if they confirm. Either path works once they do — this skill's Step 2, or having them type `handoff: <the prompt>` themselves (Step 3, zero tokens).
+
+The discriminator is *what the words request*, not what they are about. "Has handoff a una nueva sesión" requests the **action**, and answering it with a document is the failure this skill exists to prevent — it drew verbatim user corrections twice. "Dame un prompt" requests the **text**, and producing it is compliance, not that failure. Both sentences are about moving to a new session; only one asks you to close this one.
 
 **Tie-break — did they ask, or did they observe?** Check **Do NOT use** first. It wins outright; this tie-break only arbitrates between Direct, Proactive and Soft. An exclusion stays excluded however directly it is asked for — "borrá todo lo de esta conversación y empezamos de cero, no necesito ningún contexto" is a plain imperative, but what it asks for is `/clear`, so it is excluded rather than Direct. Read "asked for it" below as *asked for the handoff*, not as *used the imperative mood*.
 
