@@ -10,6 +10,7 @@
 # Covers:
 #   A. An unterminated marker block must not delete the rc file to EOF,
 #      and no rc rewrite proceeds without a .bak.
+#   B. Uninstall must not delete unrelated hooks that share a matcher group.
 #
 # Usage: ./tests/installer-safety.sh
 
@@ -58,6 +59,14 @@ tool_name() {
   case "$1" in
     handoff) echo "claude-session-handoff" ;;
     restart) echo "claude-restart" ;;
+  esac
+}
+
+# The SessionStart hook command each installer registers and removes.
+session_start_hook() {
+  case "$1" in
+    handoff) echo "~/.claude/scripts/handoff-session-start.sh" ;;
+    restart) echo "~/.claude/scripts/capture-session-id.sh" ;;
   esac
 }
 
@@ -172,6 +181,58 @@ EOF
   cp "$RC_FILE" "$SB/rc-before"
   run_installer "$TOOL" --uninstall
   assert "A5 .bak holds the pre-rewrite rc exactly"  'cmp -s "$RC_FILE.bak" "$SB/rc-before"'
+done
+
+# ---------------------------------------------------------------------------
+# Case B: uninstall must not take unrelated hooks down with ours
+#
+# `.hooks[$ev] |= map(select(.hooks | all(.command != $cmd)))` filters the OUTER
+# group array, so a matcher group is dropped whole as soon as any hook inside it
+# matches. A user who keeps their own hook in the same group lost it silently.
+# ---------------------------------------------------------------------------
+
+for TOOL in handoff restart; do
+  echo "Case B ($TOOL): uninstall keeps unrelated hooks in a shared group"
+
+  new_sandbox "caseB-$TOOL"
+  OURS=$(session_start_hook "$TOOL")
+  # A hand-consolidated SessionStart: the user's own hook sits in the SAME
+  # group as ours, plus a second group that is entirely theirs.
+  cat > "$CLAUDE_DIR/settings.json" << EOF
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/scripts/my-precious-analytics.sh" },
+          { "type": "command", "command": "$OURS" }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "~/.claude/scripts/unrelated-group.sh" }
+        ]
+      }
+    ]
+  }
+}
+EOF
+  run_installer "$TOOL" --uninstall
+  assert "B unrelated hook in the shared group survives" \
+    'jq -e "[.. | .command? // empty] | index(\"~/.claude/scripts/my-precious-analytics.sh\")" "$CLAUDE_DIR/settings.json" >/dev/null'
+  assert "B unrelated hook in its own group survives" \
+    'jq -e "[.. | .command? // empty] | index(\"~/.claude/scripts/unrelated-group.sh\")" "$CLAUDE_DIR/settings.json" >/dev/null'
+  assert "B our own hook is gone" \
+    '! grep -q "$(basename "$OURS")" "$CLAUDE_DIR/settings.json"'
+  assert "B no empty matcher group is left behind" \
+    'jq -e "[.hooks.SessionStart[] | select((.hooks | length) == 0)] | length == 0" "$CLAUDE_DIR/settings.json" >/dev/null'
+
+  # B2 — a group that held only our hook is removed, not left empty
+  new_sandbox "caseB2-$TOOL"
+  run_installer "$TOOL"
+  run_installer "$TOOL" --uninstall
+  assert "B2 SessionStart key removed when nothing remains" \
+    'jq -e "(.hooks.SessionStart // []) | length == 0" "$CLAUDE_DIR/settings.json" >/dev/null'
 done
 
 echo ""
