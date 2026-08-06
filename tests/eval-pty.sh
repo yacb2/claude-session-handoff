@@ -58,6 +58,9 @@ EVAL_SET="$REPO/skills/session-handoff/evals/trigger-eval.json"
 TMP_DIR="${HOME}/.claude/tmp"
 PER_QUERY_TIMEOUT=150
 QUERY_LIMIT=0  # 0 = no limit
+# Where per-unit results land. Empty means a temp dir cleaned on success; set it
+# to keep them, which is what you want for a run long enough to be interrupted.
+RESULTS_DIR_OVERRIDE=""
 MODEL="claude-sonnet-4-6"
 # Default >1 on purpose: a single rep is the defect this file was rewritten to
 # stop reporting as a measurement.
@@ -74,6 +77,7 @@ while [ $# -gt 0 ]; do
     --model)       MODEL="$2"; shift 2 ;;
     --eval-set)    EVAL_SET="$2"; shift 2 ;;
     --reps)        REPS="$2"; shift 2 ;;
+    --results-dir) RESULTS_DIR_OVERRIDE="$2"; shift 2 ;;
     --jobs)        JOBS="$2"; shift 2 ;;
     -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
@@ -115,8 +119,42 @@ JSON
 # Per-(query,rep) verdicts land here as one file each, which is also how the
 # counters survive concurrency: background jobs cannot write to the parent's
 # variables, so the filesystem is the channel.
-RESULT_DIR=$(mktemp -d -t eval-pty-results.XXXXXX)
-trap 'rm -f "$SETTINGS_OVERLAY"; rm -rf "$RESULT_DIR"' EXIT
+#
+# The report prints only once EVERY unit has completed, so an interrupted run
+# used to leave nothing at all: a run killed at 54 of 99 units on 2026-08-06
+# produced no output, and its verdicts and fire times had to be scraped out of
+# the live process by hand before the trap removed them. Two changes, so that
+# cannot repeat: progress.tsv is appended per unit as it finishes, and the
+# directory now outlives an abnormal exit.
+if [ -n "$RESULTS_DIR_OVERRIDE" ]; then
+  RESULT_DIR="$RESULTS_DIR_OVERRIDE"
+  mkdir -p "$RESULT_DIR"
+  KEEP_RESULTS=1          # the caller named it; it is theirs to delete
+else
+  RESULT_DIR=$(mktemp -d -t eval-pty-results.XXXXXX)
+  KEEP_RESULTS=0
+fi
+PROGRESS_LOG="$RESULT_DIR/progress.tsv"
+COMPLETED=0
+
+cleanup() {
+  rm -f "$SETTINGS_OVERLAY"
+  if [ "$KEEP_RESULTS" = 1 ]; then
+    return
+  fi
+  if [ "$COMPLETED" = 1 ]; then
+    rm -rf "$RESULT_DIR"
+  else
+    echo "# interrupted before the report — partial results kept in:" >&2
+    echo "#   $RESULT_DIR" >&2
+    echo "# progress.tsv has one line per completed unit: unit, mode, verdict," >&2
+    echo "#   fire turn, fire seconds. Delete the directory when done with it." >&2
+  fi
+}
+trap cleanup EXIT
+# Without these, a SIGINT/SIGTERM skips the EXIT trap's message in some shells.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Per-query expect runner. Writes a single verdict CODE to $RESULT_FILE.
 #
@@ -266,11 +304,18 @@ EXP
   # Preserve the fire timing before the markers go. Kept in a sidecar rather
   # than appended to $RESULT_FILE, whose whole contents the report `cat`s into
   # a `case` — a second line there would be read as part of the verdict code.
+  FIRE_TURN="-"; FIRE_SECS="-"
   if [ -f "$FIRED_FILE" ]; then
     cat "$FIRED_FILE" > "$RESULT_FILE.fire"
+    read -r FIRE_TURN FIRE_SECS < "$FIRED_FILE" || true
   fi
   rm -f $MARKERS
   printf '%s\n' "$CODE" > "$RESULT_FILE"
+  # Durable record, appended the moment this unit finishes. A single short
+  # line opened O_APPEND is written atomically, so concurrent units interleave
+  # cleanly rather than tearing.
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(basename "$RESULT_FILE")" "$MODE" "$CODE" "$FIRE_TURN" "$FIRE_SECS" >> "$PROGRESS_LOG"
 }
 
 QUERIES=$(jq -c '.[]' "$EVAL_SET")
@@ -461,6 +506,10 @@ if [ "$REPS" -lt 3 ]; then
   echo "#   floor of 0, then 5/6 with a floor of 1, back to back and unchanged."
 fi
 [ "$BAD" -eq 0 ] || echo "# WARNING: $BAD entries skipped as unusable"
+
+# The report is out, so the results directory has served its purpose and the
+# EXIT trap may clean it.
+COMPLETED=1
 
 # Green means every rep of every query passed. Intermittency is a failure of
 # the skill or of the harness, never a pass.
