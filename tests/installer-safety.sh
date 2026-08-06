@@ -67,11 +67,23 @@ tool_name() {
   esac
 }
 
+# How the installer refers to CLAUDE_DIR inside the files it generates. Mirrors
+# install.sh's CLAUDE_REF: tilde-relative under $HOME so a dotfiles rc stays
+# portable, absolute otherwise. A fixture that hardcoded `~/.claude` instead
+# would not match what the installer writes in a sandbox, and the mismatch shows
+# up as a false failure in the removal and migration cases.
+claude_ref() {
+  case "$CLAUDE_DIR" in
+    "$HOME"/*) printf '~%s' "${CLAUDE_DIR#$HOME}" ;;
+    *)         printf '%s' "$CLAUDE_DIR" ;;
+  esac
+}
+
 # The SessionStart hook command each installer registers and removes.
 session_start_hook() {
   case "$1" in
-    handoff) echo "~/.claude/scripts/handoff-session-start.sh" ;;
-    restart) echo "~/.claude/scripts/capture-session-id.sh" ;;
+    handoff) printf '%s/scripts/handoff-session-start.sh' "$(claude_ref)" ;;
+    restart) printf '%s/scripts/capture-session-id.sh' "$(claude_ref)" ;;
   esac
 }
 
@@ -381,6 +393,81 @@ EOF
   run_installer "$TOOL" || D4_STATUS=$?
   assert "D4 install fails on a non-object settings"  '[ "$D4_STATUS" -ne 0 ]'
   assert "D4 settings.json is left byte-identical"    'cmp -s "$CLAUDE_DIR/settings.json" "$SB/settings-before"'
+done
+
+# ---------------------------------------------------------------------------
+# Case E: the sandbox overrides must actually contain the installer
+#
+# The fish branch hardcoded $HOME/.config/fish/functions/claude.fish, ignoring
+# both RC_FILE_OVERRIDE and CLAUDE_DIR that every other path honours. Inert only
+# because no test set SHELL_NAME_OVERRIDE=fish — the moment one did, the suite
+# would start editing the developer's own fish config.
+#
+# HOME is sandboxed here too, so even the pre-fix code cannot reach a real
+# config: the assertion is that the file lands where RC_FILE_OVERRIDE says and
+# NOT at the hardcoded location under HOME.
+# ---------------------------------------------------------------------------
+
+for TOOL in handoff restart; do
+  echo "Case E ($TOOL): the fish branch honours the sandbox overrides"
+
+  new_sandbox "caseE-$TOOL"
+  E_HOME="$SB/home"
+  mkdir -p "$E_HOME"
+  FISH_RC="$SB/claude.fish"
+  HARDCODED="$E_HOME/.config/fish/functions/claude.fish"
+
+  E_STATUS=0
+  ( HOME="$E_HOME" CLAUDE_DIR="$CLAUDE_DIR" RC_FILE_OVERRIDE="$FISH_RC" \
+    SHELL_NAME_OVERRIDE=fish sh -c 'cd "$1" && ./install.sh' _ \
+    "$([ "$TOOL" = handoff ] && echo "$REPO_HANDOFF" || echo "$REPO_RESTART")" \
+  ) >/dev/null 2>&1 || E_STATUS=$?
+
+  assert "E install succeeds under the fish override"  '[ "$E_STATUS" -eq 0 ]'
+  assert "E the fish function went to RC_FILE_OVERRIDE" '[ -f "$FISH_RC" ]'
+  assert "E nothing was written to the hardcoded path"  '[ ! -e "$HARDCODED" ]'
+done
+
+# ---------------------------------------------------------------------------
+# Case F: CLAUDE_DIR must reach the generated files, not just the copies
+#
+# Files installed under $CLAUDE_DIR while the rc block and the hook commands
+# hardcoded ~/.claude, so `CLAUDE_DIR=/opt/claude ./install.sh` reported an
+# all-green install and produced a `claude` function pointing at a wrapper that
+# is not there.
+#
+# The generated reference must stay $HOME-relative in the ordinary case — a
+# dotfiles-managed rc is synced across machines — so the check is not "contains
+# an absolute path" but "resolves to the directory that was actually used".
+# ---------------------------------------------------------------------------
+
+for TOOL in handoff restart; do
+  echo "Case F ($TOOL): CLAUDE_DIR reaches the rc block and the hooks"
+
+  new_sandbox "caseF-$TOOL"
+  CUSTOM="$SB/opt-claude"
+  export CLAUDE_DIR="$CUSTOM"
+  run_installer "$TOOL"
+  HOOK_BASENAME=$(basename "$(session_start_hook "$TOOL")")
+
+  assert "F the wrapper really is under CLAUDE_DIR" \
+    '[ -f "$CUSTOM/scripts/claude-wrapper.sh" ]'
+  assert "F the rc block points at CLAUDE_DIR, not ~/.claude" \
+    'grep -q "$CUSTOM/scripts/claude-wrapper.sh" "$RC_FILE"'
+  assert "F the hook command points at CLAUDE_DIR" \
+    'grep -q "$CUSTOM/scripts/$HOOK_BASENAME" "$CUSTOM/settings.json"'
+
+  # And the ordinary case must stay tilde-relative, or every dotfiles user gets
+  # their home directory baked into .zshrc.
+  new_sandbox "caseF2-$TOOL"
+  F2_HOME="$SB/home"
+  mkdir -p "$F2_HOME/.claude"
+  ( HOME="$F2_HOME" CLAUDE_DIR="$F2_HOME/.claude" RC_FILE_OVERRIDE="$RC_FILE" \
+    SHELL_NAME_OVERRIDE=zsh sh -c 'cd "$1" && ./install.sh' _ \
+    "$([ "$TOOL" = handoff ] && echo "$REPO_HANDOFF" || echo "$REPO_RESTART")" \
+  ) >/dev/null 2>&1
+  assert "F2 the default install still writes ~/.claude, not an absolute home" \
+    'grep -q "~/.claude/scripts/claude-wrapper.sh" "$RC_FILE"'
 done
 
 echo ""
