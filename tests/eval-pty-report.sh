@@ -132,6 +132,29 @@ ORDER=$(grep -oE '^\[[0-9]+\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//'
   && ok "exit status is non-zero when reps are intermittent" \
   || no "harness exited 0 despite intermittent queries"
 
+# --- the turn-2 confirmation is a measurement-defining constant ------------
+# `propose` is scored by sending this string and checking whether the marker
+# appears afterwards, so its WORDING decides the score. The previous value,
+# `sí, hazlo / yes, go ahead`, carried an imperative to act — and the imperative
+# alone was producing the passes. BL-020's [29] scored propose 3/3 with it and
+# 0/3 with a bare confirmation, changing nothing else. That is the weak spot
+# eval-pty.sh had recorded as hypothetical at its own lines ~217-220, and it
+# means every propose number taken before 2026-08-06 is an upper bound (BL-021).
+#
+# Pinned to an exact string on purpose, rather than matched against a rule.
+# Changing it changes the ruler, so it must FAIL here and force a re-baseline of
+# every propose entry instead of passing quietly. An "allowlist of contentless
+# affirmations" was considered and rejected: it is a rule authored to fit one
+# observation, and it would wave through the next `claro, dale` while still
+# reporting green.
+CONFIRM_LINE=$(grep -c '^      send -- {ok}$' "$REPO/tests/eval-pty.sh")
+if [ "$CONFIRM_LINE" = 1 ]; then
+  ok "eval-pty.sh confirms propose with the pinned bare token"
+else
+  no "eval-pty.sh's turn-2 confirmation is not the pinned 'ok' — got: $(grep -n 'send -- {' "$REPO/tests/eval-pty.sh" | grep -v QUERY | tr '\n' ' ')
+    Changing it re-baselines every propose score; record the new reference (BL-021) rather than editing this line to match."
+fi
+
 # Fire timings (BL-014 step 1). The stub fires on 6 of the 9 units — q1 and q3
 # on reps 1 and 3 (turn 1), q2 on rep 1 (turn 2) and rep 3 (turn 1) — so the
 # aggregate must be n=6 with turn1 max 7s, turn2 max 11s, overall max 11s.
