@@ -24,6 +24,66 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 
+# --- static source checks, BEFORE the harness is ever executed ------------
+# These read eval-pty.sh as TEXT and must run first. The assertions further
+# down invoke it against a stub, and invoking it expands the very heredoc one
+# of these checks exists to police — so ordering them after the run would mean
+# executing the defect and then reporting it.
+# --- nothing in the expect heredoc may be shell-expanded by accident -------
+# `expect <<EXP` is an UNQUOTED heredoc, so the shell expands its body before
+# expect ever sees it. That is deliberate for `$QUERY`, `$TIMEOUT`, `$MODEL` —
+# and a trap for everything else.
+#
+# Measured, not imagined: a comment added on 2026-08-06 quoted the old
+# confirmation string in backticks. Backticks inside an unquoted heredoc are
+# command substitution, so every unit of every run tried to execute
+# `sí, hazlo / yes, go ahead` as a shell command. A Tcl comment hides it from
+# the reader, and the harness's own `2>&1 || true` does not suppress it — the
+# substitution happens during expansion, before that redirection applies.
+#
+# It cost a 45-unit run. Cheap to prevent, invisible to review.
+#
+# BOTH substitution forms, not just the one that bit us. Checking backticks
+# alone would leave `$(...)` — the same defect in the spelling most people
+# actually reach for — walking straight through a guard reporting green. The
+# heredoc contains neither today, so closing the class costs nothing.
+#
+# `${...}` is deliberately NOT rejected: it is parameter expansion and cannot
+# run a command, so banning it would overstate what this check is for. Escaped
+# forms (`\$t1`, `\$fh`) are how the file already defers expansion to Tcl and
+# stay legal — hence the "not preceded by a backslash" match.
+HEREDOC=$(awk '/expect <<EXP/{f=1;next} /^EXP$/{f=0} f' "$REPO/tests/eval-pty.sh")
+BADSUB=$(printf '%s\n' "$HEREDOC" | grep -nE '(^|[^\\])(`|\$\()' | head -3 | tr '\n' ' ')
+if [ -z "$BADSUB" ]; then
+  ok "the expect heredoc has no command substitution for the shell to execute"
+else
+  no "command substitution inside the expect heredoc — the shell runs it on every unit: $BADSUB
+    Put the note above run_one() instead, outside the heredoc."
+fi
+
+# --- the turn-2 confirmation is a measurement-defining constant ------------
+# `propose` is scored by sending this string and checking whether the marker
+# appears afterwards, so its WORDING decides the score. The previous value,
+# `sí, hazlo / yes, go ahead`, carried an imperative to act — and the imperative
+# alone was producing the passes. BL-020's [29] scored propose 3/3 with it and
+# 0/3 with a bare confirmation, changing nothing else. That is the weak spot
+# eval-pty.sh had recorded as hypothetical at its own lines ~217-220, and it
+# means every propose number taken before 2026-08-06 is an upper bound (BL-021).
+#
+# Pinned to an exact string on purpose, rather than matched against a rule.
+# Changing it changes the ruler, so it must FAIL here and force a re-baseline of
+# every propose entry instead of passing quietly. An "allowlist of contentless
+# affirmations" was considered and rejected: it is a rule authored to fit one
+# observation, and it would wave through the next `claro, dale` while still
+# reporting green.
+CONFIRM_LINE=$(grep -c '^      send -- {ok}$' "$REPO/tests/eval-pty.sh")
+if [ "$CONFIRM_LINE" = 1 ]; then
+  ok "eval-pty.sh confirms propose with the pinned bare token"
+else
+  no "eval-pty.sh's turn-2 confirmation is not the pinned 'ok' — got: $(grep -n 'send -- {' "$REPO/tests/eval-pty.sh" | grep -v QUERY | tr '\n' ' ')
+    Changing it re-baselines every propose score; record the new reference (BL-021) rather than editing this line to match."
+fi
+
 SANDBOX=$(mktemp -d -t eval-pty-report.XXXXXX)
 trap 'rm -rf "$SANDBOX"' EXIT
 mkdir -p "$SANDBOX/bin"
@@ -132,50 +192,6 @@ ORDER=$(grep -oE '^\[[0-9]+\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//'
   && ok "exit status is non-zero when reps are intermittent" \
   || no "harness exited 0 despite intermittent queries"
 
-# --- nothing in the expect heredoc may be shell-expanded by accident -------
-# `expect <<EXP` is an UNQUOTED heredoc, so the shell expands its body before
-# expect ever sees it. That is deliberate for `$QUERY`, `$TIMEOUT`, `$MODEL` —
-# and a trap for everything else.
-#
-# Measured, not imagined: a comment added on 2026-08-06 quoted the old
-# confirmation string in backticks. Backticks inside an unquoted heredoc are
-# command substitution, so every unit of every run tried to execute
-# `sí, hazlo / yes, go ahead` as a shell command. A Tcl comment hides it from
-# the reader, and the harness's own `2>&1 || true` does not suppress it — the
-# substitution happens during expansion, before that redirection applies.
-#
-# It cost a 45-unit run. Cheap to prevent, invisible to review.
-HEREDOC=$(awk '/expect <<EXP/{f=1;next} /^EXP$/{f=0} f' "$REPO/tests/eval-pty.sh")
-BADSUB=$(printf '%s\n' "$HEREDOC" | grep -n '`' | head -3 | tr '\n' ' ')
-if [ -z "$BADSUB" ]; then
-  ok "the expect heredoc has no backticks for the shell to execute"
-else
-  no "backtick inside the expect heredoc — the shell runs it as a command on every unit: $BADSUB
-    Put the note above run_one() instead, outside the heredoc."
-fi
-
-# --- the turn-2 confirmation is a measurement-defining constant ------------
-# `propose` is scored by sending this string and checking whether the marker
-# appears afterwards, so its WORDING decides the score. The previous value,
-# `sí, hazlo / yes, go ahead`, carried an imperative to act — and the imperative
-# alone was producing the passes. BL-020's [29] scored propose 3/3 with it and
-# 0/3 with a bare confirmation, changing nothing else. That is the weak spot
-# eval-pty.sh had recorded as hypothetical at its own lines ~217-220, and it
-# means every propose number taken before 2026-08-06 is an upper bound (BL-021).
-#
-# Pinned to an exact string on purpose, rather than matched against a rule.
-# Changing it changes the ruler, so it must FAIL here and force a re-baseline of
-# every propose entry instead of passing quietly. An "allowlist of contentless
-# affirmations" was considered and rejected: it is a rule authored to fit one
-# observation, and it would wave through the next `claro, dale` while still
-# reporting green.
-CONFIRM_LINE=$(grep -c '^      send -- {ok}$' "$REPO/tests/eval-pty.sh")
-if [ "$CONFIRM_LINE" = 1 ]; then
-  ok "eval-pty.sh confirms propose with the pinned bare token"
-else
-  no "eval-pty.sh's turn-2 confirmation is not the pinned 'ok' — got: $(grep -n 'send -- {' "$REPO/tests/eval-pty.sh" | grep -v QUERY | tr '\n' ' ')
-    Changing it re-baselines every propose score; record the new reference (BL-021) rather than editing this line to match."
-fi
 
 # Fire timings (BL-014 step 1). The stub fires on 6 of the 9 units — q1 and q3
 # on reps 1 and 3 (turn 1), q2 on rep 1 (turn 2) and rep 3 (turn 1) — so the
