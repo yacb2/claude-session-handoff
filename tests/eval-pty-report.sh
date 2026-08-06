@@ -132,6 +132,28 @@ ORDER=$(grep -oE '^\[[0-9]+\]' "$OUT" | tr -d '[]' | tr '\n' ' ' | sed 's/ *$//'
   && ok "exit status is non-zero when reps are intermittent" \
   || no "harness exited 0 despite intermittent queries"
 
+# --- nothing in the expect heredoc may be shell-expanded by accident -------
+# `expect <<EXP` is an UNQUOTED heredoc, so the shell expands its body before
+# expect ever sees it. That is deliberate for `$QUERY`, `$TIMEOUT`, `$MODEL` —
+# and a trap for everything else.
+#
+# Measured, not imagined: a comment added on 2026-08-06 quoted the old
+# confirmation string in backticks. Backticks inside an unquoted heredoc are
+# command substitution, so every unit of every run tried to execute
+# `sí, hazlo / yes, go ahead` as a shell command. A Tcl comment hides it from
+# the reader, and the harness's own `2>&1 || true` does not suppress it — the
+# substitution happens during expansion, before that redirection applies.
+#
+# It cost a 45-unit run. Cheap to prevent, invisible to review.
+HEREDOC=$(awk '/expect <<EXP/{f=1;next} /^EXP$/{f=0} f' "$REPO/tests/eval-pty.sh")
+BADSUB=$(printf '%s\n' "$HEREDOC" | grep -n '`' | head -3 | tr '\n' ' ')
+if [ -z "$BADSUB" ]; then
+  ok "the expect heredoc has no backticks for the shell to execute"
+else
+  no "backtick inside the expect heredoc — the shell runs it as a command on every unit: $BADSUB
+    Put the note above run_one() instead, outside the heredoc."
+fi
+
 # --- the turn-2 confirmation is a measurement-defining constant ------------
 # `propose` is scored by sending this string and checking whether the marker
 # appears afterwards, so its WORDING decides the score. The previous value,
