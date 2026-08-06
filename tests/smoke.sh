@@ -189,6 +189,18 @@ assert "bell on: value is a bare BEL (allowlisted)" \
 assert "bell on: systemMessage banner unaffected" \
   'printf "%s" "$BELL_ON" | jq -e ".systemMessage" >/dev/null'
 
+# --- Case 9: the two repos ship the same wrapper ---
+# The wrapper is co-owned and byte-for-byte identical by contract, but nothing
+# enforced it — the protocol relied on whoever edited it remembering to copy.
+# `install_wrapper` only overwrites when its version is HIGHER, so two repos at
+# the same version with different content is the one divergence that never
+# resolves itself: whichever installer runs second declines to overwrite.
+echo "Case 9: both repos ship the identical wrapper"
+assert "wrapper byte-identical across repos" \
+  'cmp -s "$REPO_HANDOFF/scripts/claude-wrapper.sh" "$REPO_RESTART/scripts/claude-wrapper.sh"'
+assert "both declare the same version" \
+  '[ "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_HANDOFF/scripts/claude-wrapper.sh")" = "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_RESTART/scripts/claude-wrapper.sh")" ]'
+
 echo ""
 echo "Summary: $PASS pass, $FAIL fail"
 [ "$FAIL" -eq 0 ]

@@ -110,5 +110,79 @@ else
   no "expected the payload-less warning on stdout"
 fi
 
+# --- exit status and stdin (BL-012) ---------------------------------------
+# Both defects come from the same line: run_claude backgrounds claude so the
+# exit watcher can run alongside it, and `cmd &` costs you two things — the
+# status, because the script's last command is the dispatch `while` loop, and
+# stdin, because POSIX assigns /dev/null to an asynchronous list's stdin when
+# job control is off (sh and dash both do it).
+#
+# Each scenario gets its own HOME: the wrapper keys every file off its PID, but
+# a shared tmp dir would still let one scenario's argv.log feed another's.
+scenario() {
+  SHOME="$SANDBOX/$1"
+  SBIN="$SHOME/bin"
+  mkdir -p "$SBIN" "$SHOME/.claude/tmp"
+}
+
+# 5. a non-zero status survives a run with no handoff at all.
+#    The naive shape of this bug: the script ends on the `while` loop, and a
+#    loop whose body never ran exits 0 regardless of what claude did.
+scenario exitcode
+cat > "$SBIN/claude" <<'STUB'
+#!/bin/sh
+exit 42
+STUB
+chmod +x "$SBIN/claude"
+HOME="$SHOME" PATH="$SBIN:$PATH" sh "$WRAPPER" >/dev/null 2>&1
+RC=$?
+if [ "$RC" = 42 ]; then
+  ok "wrapper propagates claude's exit status"
+else
+  no "expected exit 42 from the wrapper, got $RC — 'claude -p ... || handle' can never fire"
+fi
+
+# 6. and survives the dispatch loop too, where the failing run is the LAST
+#    iteration rather than the only one. A fix that only propagates the first
+#    run_claude passes check 5 and fails here.
+scenario exitcode_loop
+cat > "$SBIN/claude" <<'STUB'
+#!/bin/sh
+TMP="$HOME/.claude/tmp"
+printf 'x\n' >> "$TMP/runs.log"
+if [ "$(wc -l < "$TMP/runs.log")" -eq 1 ]; then
+  touch "$TMP/handoff-flag-$CLAUDE_HANDOFF_ID"
+  exit 0
+fi
+exit 42
+STUB
+chmod +x "$SBIN/claude"
+HOME="$SHOME" PATH="$SBIN:$PATH" sh "$WRAPPER" >/dev/null 2>&1
+RC=$?
+if [ "$RC" = 42 ]; then
+  ok "wrapper propagates the status of the LAST run, after a handoff"
+else
+  no "expected exit 42 after a handoff iteration, got $RC"
+fi
+
+# 7. piped stdin reaches claude. Verified against the pre-fix wrapper: the stub
+#    logged an empty string for both a pipe and a redirected file, while the
+#    same stub invoked directly received the data — so this is the wrapper's
+#    doing, not the stub's.
+scenario stdin
+cat > "$SBIN/claude" <<'STUB'
+#!/bin/sh
+printf 'stdin=[%s]\n' "$(cat)" > "$HOME/.claude/tmp/stdin.log"
+exit 0
+STUB
+chmod +x "$SBIN/claude"
+printf 'hello-from-pipe' | HOME="$SHOME" PATH="$SBIN:$PATH" sh "$WRAPPER" -p "x" >/dev/null 2>&1
+GOT=$(cat "$SHOME/.claude/tmp/stdin.log" 2>/dev/null || echo "<no log>")
+if [ "$GOT" = "stdin=[hello-from-pipe]" ]; then
+  ok "piped stdin reaches claude"
+else
+  no "piped stdin was replaced: stub saw '$GOT' — \`cat notes.md | claude -p\` sends nothing"
+fi
+
 summary
 [ "$FAIL" = 0 ]
