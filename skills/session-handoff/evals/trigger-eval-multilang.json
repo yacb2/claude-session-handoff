@@ -21,7 +21,8 @@
   },
   {
     "query": "新しいセッションで続けたい、データベース移行の計画は維持してください",
-    "expect": "execute"
+    "expect": "execute",
+    "why": "First-person want aimed at the session move itself, with no question and no imperative — asking, so execute."
   },
   {
     "query": "请做一个 handoff，会话太长了，我们快要达到上下文上限，正在重构认证中间件",
@@ -29,6 +30,7 @@
   },
   {
     "query": "我想在新会话里继续，但保留我们当前关于数据库迁移的计划",
-    "expect": "execute"
+    "expect": "execute",
+    "why": "First-person want aimed at the session move itself, with no question and no imperative — asking, so execute."
   }
 ]

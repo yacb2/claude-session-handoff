@@ -25,10 +25,15 @@ The front-matter only routes — it decides whether this skill gets surfaced at 
 
 **Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly — propose it, summarize what would be seeded, and confirm before running. In practice: a one-line proposal naming what would be seeded (current goal + open thread), then ask if they want it triggered. Only execute after they confirm.
 
-**Tie-break — did they ask, or did they observe?** One sentence can match Direct, Proactive and Soft at once: "let's start over in a new session but keep the plan" matches all three, and wanting to keep the context does not separate them, because every case above wants that. Decide on this and nothing else:
+**Tie-break — did they ask, or did they observe?** Check **Do NOT use** first. It wins outright; this tie-break only arbitrates between Direct, Proactive and Soft. An exclusion stays excluded however directly it is asked for — "borrá todo lo de esta conversación y empezamos de cero, no necesito ningún contexto" is a plain imperative, but what it asks for is `/clear`, so it is excluded rather than Direct. Read "asked for it" below as *asked for the handoff*, not as *used the imperative mood*.
+
+Past that, one sentence can match Direct, Proactive and Soft at once: "let's start over in a new session but keep the plan" matches all three, and wanting to keep the context does not separate them, because every case above wants that. Decide on this and nothing else:
 
 - The user **asked for it** — imperative ("hand off this session"), cohortative ("let's move to a clean session"), or an interrogative request ("can we...?", "¿podemos...?") — then it is a Direct trigger. Execute.
+- The user **stated a first-person want for the move itself** — "I want a fresh session, keep the plan", "quiero seguir en una sesión nueva" — then they are asking, even with no question and no imperative. Execute. What the want is aimed at decides: a want aimed at the *work* is not a request for anything — "but I want to keep going on the CORS bug" names what they want preserved, and leaves the sentence a description.
 - The user **described a state or voiced a hedged opinion** without asking — "this chat is getting unwieldy", "I think we should start over" — then it is a soft signal. Propose.
+
+Proactive situations run through the same three branches; they set the *subject*, never the verdict. Asked inside one — "instalé un plugin nuevo, ¿podemos reiniciar pero seguir donde voy?" — is Direct: execute. Merely reported — "necesito recargar los hooks nuevos que metí, pero quiero seguir donde estoy con el bug del CORS" — stays Proactive: propose, because the only first-person want there is aimed at the work.
 
 A question that asks for *options* rather than for the handoff — "is there another way to keep working clean without losing the plan?" — is describing, not asking. Propose.
 
@@ -40,6 +45,10 @@ This case is narrow by design and does not weaken the one above it: it requires 
 - The user only wants `/clear` (no context preserved).
 - The conversation is short and `/compact` is enough.
 - The user wants to keep responding in the same session without restarting.
+- The user wants to restart something that is not the Claude Code session — the dev server, docker, a container, a tmux pane, an ssh connection.
+- The user is asking what `/compact`, `/clear` or `--resume` *do*. Answer the question; do not act on it.
+
+This list is the authoritative one. `when_to_use` carries the same exclusions so the routing layer can drop the obvious cases before the skill is ever surfaced, but where the two differ, this list governs.
 
 ## Why handoff vs. /compact
 
