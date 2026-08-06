@@ -191,10 +191,11 @@ run_one() {
   EXIT_TRIGGER="$TMP_DIR/handoff-exit-$HANDOFF_ID"
   ALIVE_FILE="$TMP_DIR/handoff-alive-$HANDOFF_ID"
   TURN1_FILE="$TMP_DIR/handoff-turn1-$HANDOFF_ID"
+  FIRED_FILE="$TMP_DIR/handoff-fired-$HANDOFF_ID"
   # One list, used before and after. Enumerating the markers twice is how one
   # of them survives into the next rep — and reps of a query now run
   # concurrently, which is the contamination the per-rep id exists to stop.
-  MARKERS="$FLAG_FILE $PAYLOAD_FILE $EXIT_TRIGGER $ALIVE_FILE $TURN1_FILE"
+  MARKERS="$FLAG_FILE $PAYLOAD_FILE $EXIT_TRIGGER $ALIVE_FILE $TURN1_FILE $FIRED_FILE"
   rm -f $MARKERS
 
   CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >/dev/null 2>&1 || true
@@ -208,7 +209,8 @@ run_one() {
     expect -timeout 60 -re {auto mode|Welcome back|Try "} {} timeout { exit 3 }
     send -- {$QUERY}
     send -- "\x1b\[13u"
-    set deadline [expr {[clock seconds] + $TIMEOUT}]
+    set t1 [clock seconds]
+    set deadline [expr {\$t1 + $TIMEOUT}]
     while {[clock seconds] < \$deadline} {
       expect -timeout 1 -re ".+"
       if {[file exists "$FLAG_FILE"]} { break }
@@ -216,16 +218,27 @@ run_one() {
     # Record turn 1's outcome POSITIVELY, then declare the run live. Order
     # matters: turn1 before alive means a crash between them still reads as
     # harness-error rather than as a turn-1 miss.
-    if {[file exists "$FLAG_FILE"]} { exec touch "$TURN1_FILE" }
+    if {[file exists "$FLAG_FILE"]} {
+      exec touch "$TURN1_FILE"
+      set fh [open "$FIRED_FILE" w]
+      puts \$fh "turn1 [expr {[clock seconds] - \$t1}]"
+      close \$fh
+    }
     exec touch "$ALIVE_FILE"
     # Turn 2, only for propose, and only if turn 1 correctly held off.
     if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
       send -- {sí, hazlo / yes, go ahead}
       send -- "\x1b\[13u"
-      set deadline2 [expr {[clock seconds] + $TIMEOUT}]
+      set t2 [clock seconds]
+      set deadline2 [expr {\$t2 + $TIMEOUT}]
       while {[clock seconds] < \$deadline2} {
         expect -timeout 1 -re ".+"
         if {[file exists "$FLAG_FILE"]} { break }
+      }
+      if {[file exists "$FLAG_FILE"]} {
+        set fh [open "$FIRED_FILE" w]
+        puts \$fh "turn2 [expr {[clock seconds] - \$t2}]"
+        close \$fh
       }
     }
     send -- "/exit"
@@ -249,6 +262,12 @@ EXP
                else CODE="no-execute-after-confirm"; fi ;;
       *)       CODE="unknown-mode" ;;
     esac
+  fi
+  # Preserve the fire timing before the markers go. Kept in a sidecar rather
+  # than appended to $RESULT_FILE, whose whole contents the report `cat`s into
+  # a `case` — a second line there would be read as part of the verdict code.
+  if [ -f "$FIRED_FILE" ]; then
+    cat "$FIRED_FILE" > "$RESULT_FILE.fire"
   fi
   rm -f $MARKERS
   printf '%s\n' "$CODE" > "$RESULT_FILE"
@@ -379,6 +398,45 @@ echo "#   executed unasked (ignore)  : $C_unasked"
 echo "#   executed immediately       : $C_immediate"
 echo "#   no execute after confirm   : $C_noconfirm"
 echo "#   HARNESS ERROR (not measured): $C_harness"
+echo
+
+# --- observed fire times (BL-014 step 1) -----------------------------------
+# The absence arms cannot exit their poll loop early: for every `ignore` query
+# and for `propose` turn 1 the pass condition IS the flag never appearing, so
+# each burns the full timeout after the model went quiet ~20s in. That is most
+# of the run's wall clock.
+#
+# The fix is NOT an idle break. Breaking on N seconds of PTY silence is safe
+# where an early break can only produce a loud false FAIL; on an absence arm it
+# scores `ok` for a query that was about to fire — a silent false pass, the
+# class the liveness marker exists to close.
+#
+# So the deadline gets shortened from data instead: this records how long a
+# REAL fire took, on runs already being paid for. BL-014 step 2 sets the
+# absence-arm deadline to max(observed) x margin, which is then justified
+# rather than guessed. A max at or near $PER_QUERY_TIMEOUT means some fire was
+# still in flight at the deadline — do not shorten anything on that run.
+FIRE_N=0; FIRE_MAX=0; FIRE_T1_MAX=0; FIRE_T2_MAX=0
+for FF in "$RESULT_DIR"/*.fire; do
+  [ -f "$FF" ] || continue
+  read -r FTURN FSECS < "$FF" || continue
+  case "$FSECS" in ''|*[!0-9]*) continue ;; esac
+  FIRE_N=$((FIRE_N + 1))
+  [ "$FSECS" -gt "$FIRE_MAX" ] && FIRE_MAX=$FSECS
+  case "$FTURN" in
+    turn1) [ "$FSECS" -gt "$FIRE_T1_MAX" ] && FIRE_T1_MAX=$FSECS ;;
+    turn2) [ "$FSECS" -gt "$FIRE_T2_MAX" ] && FIRE_T2_MAX=$FSECS ;;
+  esac
+done
+
+if [ "$FIRE_N" -eq 0 ]; then
+  echo "# observed fire times: none — no rep produced the flag, so this run"
+  echo "#   bounds nothing. Do not shorten the absence-arm deadline from it."
+else
+  echo "# observed fire times (n=$FIRE_N of $TOTAL units): turn1 max ${FIRE_T1_MAX}s · turn2 max ${FIRE_T2_MAX}s · overall max ${FIRE_MAX}s"
+  echo "#   absence arms each burned the full ${PER_QUERY_TIMEOUT}s. BL-014 step 2: set their"
+  echo "#   deadline from this max x margin — not from an idle break, which false-passes them."
+fi
 echo
 # --- the reportability rule ------------------------------------------------
 # Each intermittent query is, by demonstration, capable of landing on a
