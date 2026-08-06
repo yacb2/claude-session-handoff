@@ -1,7 +1,7 @@
 ---
 description: Cierra la sesión actual y abre una nueva, sembrando contexto de handoff
 argument-hint: [prompt opcional — si va vacío, Claude lo genera del contexto actual]
-allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Write
+allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Bash(cat:*), Write
 ---
 
 # /handoff
@@ -40,8 +40,11 @@ Sé breve. Cada frase tiene que ganarse su lugar.
 Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: `$CLAUDE_HANDOFF_ID` tiene que estar seteado — si no, el wrapper no está corriendo y no podemos cerrar.
 
 ```sh
-if [ -z "$CLAUDE_HANDOFF_ID" ]; then
-  echo "handoff: no se detectó el wrapper. Lanza claude vía la función del shell que instala claude-session-handoff." >&2
+# `test -z`, no `[ -z ]`: the allowed-tools matcher treats `[` as a different
+# command word from `test`, and only `test` is declared. Same reason `printf`
+# stands in for `echo` below.
+if test -z "$CLAUDE_HANDOFF_ID"; then
+  printf '%s\n' "handoff: no se detectó el wrapper. Lanza claude vía la función del shell que instala claude-session-handoff." >&2
   exit 1
 fi
 
