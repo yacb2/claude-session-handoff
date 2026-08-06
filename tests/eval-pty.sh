@@ -191,7 +191,11 @@ run_one() {
   EXIT_TRIGGER="$TMP_DIR/handoff-exit-$HANDOFF_ID"
   ALIVE_FILE="$TMP_DIR/handoff-alive-$HANDOFF_ID"
   TURN1_FILE="$TMP_DIR/handoff-turn1-$HANDOFF_ID"
-  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$ALIVE_FILE" "$TURN1_FILE"
+  # One list, used before and after. Enumerating the markers twice is how one
+  # of them survives into the next rep — and reps of a query now run
+  # concurrently, which is the contamination the per-rep id exists to stop.
+  MARKERS="$FLAG_FILE $PAYLOAD_FILE $EXIT_TRIGGER $ALIVE_FILE $TURN1_FILE"
+  rm -f $MARKERS
 
   CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >/dev/null 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
@@ -229,25 +233,24 @@ run_one() {
     expect eof
 EXP
 
-  FIRED=1;  [ -f "$FLAG_FILE" ]  && FIRED=0
-  FIRED1=1; [ -f "$TURN1_FILE" ] && FIRED1=0
-  ALIVE=1;  [ -f "$ALIVE_FILE" ] && ALIVE=0
-  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$ALIVE_FILE" "$TURN1_FILE"
-
-  if [ "$ALIVE" != 0 ]; then
+  # Classify against the files themselves, then clean up. Carrying each result
+  # into a variable first required an inverted `0 = true` convention that made
+  # every arm read backwards ("FIRED = 1" meaning it did not fire).
+  if [ ! -f "$ALIVE_FILE" ]; then
     # Nothing was measured. This must never resolve to `ok`, and in particular
     # must not resolve to `ok` for `ignore`, whose pass condition is an absence.
     CODE="harness-error"
   else
     case "$MODE" in
-      execute) [ "$FIRED" = 0 ] && CODE="ok" || CODE="never-executed" ;;
-      ignore)  [ "$FIRED" = 1 ] && CODE="ok" || CODE="executed-unasked" ;;
-      propose) if [ "$FIRED1" = 0 ]; then CODE="executed-immediately"
-               elif [ "$FIRED" = 0 ]; then CODE="ok"
+      execute) [ -f "$FLAG_FILE" ] && CODE="ok" || CODE="never-executed" ;;
+      ignore)  [ -f "$FLAG_FILE" ] && CODE="executed-unasked" || CODE="ok" ;;
+      propose) if   [ -f "$TURN1_FILE" ]; then CODE="executed-immediately"
+               elif [ -f "$FLAG_FILE" ];  then CODE="ok"
                else CODE="no-execute-after-confirm"; fi ;;
       *)       CODE="unknown-mode" ;;
     esac
   fi
+  rm -f $MARKERS
   printf '%s\n' "$CODE" > "$RESULT_FILE"
 }
 
@@ -265,7 +268,6 @@ echo
 PIDS=""
 N=0
 BAD=0
-PLANNED=""
 
 while IFS= read -r row; do
   [ -n "$row" ] || continue
@@ -295,9 +297,10 @@ while IFS= read -r row; do
             "$RESULT_DIR/q$N.r$R" &
     PIDS="$PIDS $!"
 
-    COUNT=$(set -- $PIDS; echo $#)
-    if [ "$COUNT" -ge "$JOBS" ]; then
-      set -- $PIDS
+    # `set --` gives the count in $# for free; the previous form forked a
+    # subshell per scheduled unit to compute what the next line already had.
+    set -- $PIDS
+    if [ $# -ge "$JOBS" ]; then
       OLDEST=$1; shift
       wait "$OLDEST" 2>/dev/null || true
       PIDS="$*"
@@ -336,7 +339,9 @@ while IFS="$(printf '\t')" read -r QN QMODE QTEXT; do
       executed-unasked)         C_unasked=$((C_unasked + 1)) ;;
       executed-immediately)     C_immediate=$((C_immediate + 1)) ;;
       no-execute-after-confirm) C_noconfirm=$((C_noconfirm + 1)) ;;
-      *)                        C_harness=$((C_harness + 1)) ;;
+      harness-error|no-result)  C_harness=$((C_harness + 1)) ;;
+      *) C_harness=$((C_harness + 1))
+         echo "# !! unrecognised verdict code '$CODE' — counted as a harness error" ;;
     esac
     [ "$CODE" = "ok" ] || CODES="$CODES $CODE"
   done
