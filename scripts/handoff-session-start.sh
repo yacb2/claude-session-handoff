@@ -16,9 +16,9 @@ if [ ! -f "$PAYLOAD_FILE" ]; then
 fi
 
 PAYLOAD=$(cat "$PAYLOAD_FILE")
-rm -f "$PAYLOAD_FILE"
 
 if [ -z "$PAYLOAD" ]; then
+  rm -f "$PAYLOAD_FILE"
   exit 0
 fi
 
@@ -51,7 +51,13 @@ fi
 # systemMessage      -> shown to user on session start (the docs-supported way
 #                       to surface text at start; additionalContext alone is silent)
 # terminalSequence   -> omitted entirely unless the bell is opted in
-jq -nc \
+# Emit FIRST, delete only on success. The payload is the previous session's
+# only copy of its context; deleting it before jq has produced output means any
+# failure in between — jq missing, jq erroring — loses the brief irrecoverably
+# and the new session starts blank with no indication anything was lost.
+# One-shot semantics are preserved: the file is removed once it has been
+# emitted. Covered by hook-guard.sh Case J.
+if OUTPUT=$(jq -nc \
   --arg ctx "$WRAPPED" \
   --arg msg "$BANNER" \
   --arg seq "$BELL_SEQ" \
@@ -62,4 +68,7 @@ jq -nc \
     },
     systemMessage: $msg
   }
-  + (if $seq == "" then {} else {terminalSequence: $seq} end)'
+  + (if $seq == "" then {} else {terminalSequence: $seq} end)'); then
+  printf '%s\n' "$OUTPUT"
+  rm -f "$PAYLOAD_FILE"
+fi

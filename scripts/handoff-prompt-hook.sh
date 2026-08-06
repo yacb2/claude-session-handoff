@@ -12,17 +12,27 @@
 
 INPUT=$(cat)
 
+# `printf '%s'`, never `echo`: /bin/sh on macOS (bash with xpg_echo) and dash
+# both interpret backslash escapes in echo, so the JSON's \n became a real
+# newline INSIDE a JSON string and jq rejected the whole object. stderr is
+# discarded, so a multi-line handoff prompt silently did nothing at all — on
+# the primary, documented path. Covered by hook-guard.sh Case H.
 if command -v jq >/dev/null 2>&1; then
-  PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty')
+  PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
 else
-  PROMPT=$(echo "$INPUT" | grep -o '"prompt"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/^"prompt"[[:space:]]*:[[:space:]]*"//;s/"$//')
+  PROMPT=$(printf '%s' "$INPUT" | grep -o '"prompt"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/^"prompt"[[:space:]]*:[[:space:]]*"//;s/"$//')
 fi
 
-# Trim surrounding whitespace
-TRIMMED=$(printf '%s' "$PROMPT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+# Trim surrounding whitespace at STRING level. `sed 's/^[[:space:]]*//'` is
+# line-oriented and would strip the indentation of every line of the brief;
+# a handoff payload is multi-line by construction and its formatting matters.
+TRIMMED=${PROMPT#"${PROMPT%%[![:space:]]*}"}
+TRIMMED=${TRIMMED%"${TRIMMED##*[![:space:]]}"}
 
-# Extract leading keyword (case-insensitive), preserving payload casing
-KEYWORD=$(printf '%s' "$TRIMMED" | awk '{print tolower($1)}' | sed 's/:.*$//')
+# Leading keyword (case-insensitive), payload casing preserved. Taken with
+# parameter expansion rather than awk, which printed field 1 of EVERY line.
+FIRSTWORD=${TRIMMED%%[[:space:]]*}
+KEYWORD=$(printf '%s' "${FIRSTWORD%%:*}" | tr '[:upper:]' '[:lower:]')
 
 case "$KEYWORD" in
   handoff)
@@ -40,12 +50,16 @@ case "$LOWER" in
     PAYLOAD=""
     ;;
   handoff:*)
-    # Strip the leading "handoff:" (case-insensitive, 8 chars) + optional whitespace
-    PAYLOAD=$(printf '%s' "$TRIMMED" | cut -c9- | sed 's/^[[:space:]]*//')
+    # Everything after the first colon. `cut -c9-` was line-oriented and cut 8
+    # characters off EVERY line: "Next phase is the parser." arrived as
+    # "se is the parser.". Covered by hook-guard.sh Case H.
+    REST=${TRIMMED#*:}
+    PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
     ;;
   *)
-    # "handoff something" without colon — treat the rest as payload
-    PAYLOAD=$(printf '%s' "$TRIMMED" | sed 's/^[hH][aA][nN][dD][oO][fF][fF][[:space:]]*//')
+    # "handoff something" without colon — treat the rest as payload.
+    REST=${TRIMMED#"$FIRSTWORD"}
+    PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
     ;;
 esac
 
@@ -94,8 +108,16 @@ PAYLOAD_FILE="${HANDOFF_DIR}/handoff-payload-${CLAUDE_HANDOFF_ID}"
 FLAG_FILE="${HANDOFF_DIR}/handoff-flag-${CLAUDE_HANDOFF_ID}"
 EXIT_TRIGGER="${HANDOFF_DIR}/handoff-exit-${CLAUDE_HANDOFF_ID}"
 
+# The empty branch must ASSERT the absence, not merely skip the write.
+# CLAUDE_HANDOFF_ID is the wrapper PID and is stable for the whole dispatch
+# loop, so this path is identical for every session that wrapper launches: an
+# orphaned payload would survive until wrapper exit, and the wrapper would then
+# announce "N bytes de contexto sembrado" and relaunch with a stale brief.
+# Covered by hook-guard.sh Case I.
 if [ -n "$PAYLOAD" ]; then
   printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE"
+else
+  rm -f "$PAYLOAD_FILE"
 fi
 touch "$FLAG_FILE"
 # Signal the wrapper's watcher to terminate claude. The watcher (started by

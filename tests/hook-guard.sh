@@ -27,7 +27,11 @@ FAIL=0
 # is not enough here: this machine ships /usr/bin/jq alongside the POSIX
 # tools, so we symlink the allow-list and omit jq.
 NOJQ=$(mktemp -d)
-for t in sh grep sed awk tr cut head cat ps mkdir touch; do
+# `rm` and `wc` belong here even though only jq is being withheld: a sandbox
+# missing them makes a hook 'pass' because its cleanup crashed, not because it
+# behaved. Case J caught exactly that — the payload survived only because
+# `rm` was not found.
+for t in sh grep sed awk tr cut head cat ps mkdir touch rm wc; do
   for d in /usr/bin /bin /usr/sbin /sbin; do
     [ -x "$d/$t" ] && { ln -s "$d/$t" "$NOJQ/$t"; break; }
   done
@@ -39,8 +43,17 @@ no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 
 # run_hook <prompt-json> <chid> <path-override>
 # Sets: OUT, RC, TRIGGERED (1 if a handoff sentinel was created)
+# Also sets: PAYLOAD_OUT (contents of the written payload, empty if none) and
+# PAYLOAD_EXISTS (1/0) — the payload is the thing the next session actually
+# consumes, so several cases below assert on it rather than on the sentinel.
+# SEED_PAYLOAD, if non-empty, is written to the payload path BEFORE the hook
+# runs, so a case can test what happens to an already-present payload.
 run_hook() {
   SANDBOX=$(mktemp -d)
+  if [ -n "${SEED_PAYLOAD:-}" ]; then
+    mkdir -p "$SANDBOX/.claude/tmp"
+    printf '%s' "$SEED_PAYLOAD" > "$SANDBOX/.claude/tmp/handoff-payload-$2"
+  fi
   OUT=$(printf '%s' "$1" | HOME="$SANDBOX" PATH="$3" CLAUDE_HANDOFF_ID="$2" \
     sh "$HOOK" 2>"$SANDBOX/stderr")
   RC=$?
@@ -48,6 +61,14 @@ run_hook() {
     TRIGGERED=1
   else
     TRIGGERED=0
+  fi
+  PFILE="$SANDBOX/.claude/tmp/handoff-payload-$2"
+  if [ -f "$PFILE" ]; then
+    PAYLOAD_EXISTS=1
+    PAYLOAD_OUT=$(cat "$PFILE")
+  else
+    PAYLOAD_EXISTS=0
+    PAYLOAD_OUT=""
   fi
   rm -rf "$SANDBOX"
 }
@@ -97,6 +118,61 @@ if [ "$TRIGGERED" = 0 ] && [ "$RC" = 0 ] && [ -z "$OUT" ]; then
 else
   no "E: non-handoff prompt is inert (rc=$RC out=$OUT trig=$TRIGGERED)"
 fi
+
+# Case H — a MULTI-LINE prompt must reach the payload intact.
+# Two defects met here, and the first masked the second:
+#   `echo "$INPUT"` interprets the JSON's \n under both /bin/sh (bash with
+#   xpg_echo) and dash, producing a raw newline INSIDE a JSON string, so jq
+#   rejects the whole object and the trigger silently never fires;
+#   `cut -c9-` is line-oriented, so once jq works it strips 8 characters from
+#   EVERY line of the brief, not just the "handoff:" prefix on the first.
+# A handoff brief is multi-line by construction — this is the primary path.
+MULTI='handoff: continue the refactor
+Next phase is the parser.
+    indented line'
+run_hook '{"prompt":"handoff: continue the refactor\nNext phase is the parser.\n    indented line"}' "$TEST_PID" "$PATH"
+EXPECT_PAYLOAD='continue the refactor
+Next phase is the parser.
+    indented line'
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = "$EXPECT_PAYLOAD" ]; then
+  ok "H: a multi-line handoff payload survives verbatim"
+else
+  no "H: multi-line payload mangled (trig=$TRIGGERED) got=[$PAYLOAD_OUT]"
+fi
+
+# Case I — bare `handoff` means "fresh session, NO seeded context" (the hook's
+# own header says so). CLAUDE_HANDOFF_ID is the wrapper PID and is stable for
+# the whole dispatch loop, so the payload path is identical for every session
+# that wrapper launches. An orphaned payload therefore survives until wrapper
+# exit, and the wrapper would then announce "N bytes de contexto sembrado" and
+# relaunch with someone else's brief. The empty branch must ASSERT the absence,
+# not merely skip the write.
+SEED_PAYLOAD='stale brief from an earlier handoff'
+run_hook '{"prompt":"handoff"}' "$TEST_PID" "$PATH"
+SEED_PAYLOAD=""
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_EXISTS" = 0 ]; then
+  ok "I: bare handoff clears a stale payload instead of inheriting it"
+else
+  no "I: stale payload survived a payload-less handoff (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Case J — the SessionStart hook must not destroy the payload before it has
+# successfully emitted it. It deletes the file, then builds JSON with jq ~35
+# lines later; every failure in between loses the brief irrecoverably. The
+# sibling hook carries a jq-less fallback precisely so the trigger "never
+# silently no-ops on a machine without jq" — this side had no such care and
+# additionally destroyed the data.
+SS_HOOK="$REPO/scripts/handoff-session-start.sh"
+SSBOX=$(mktemp -d)
+mkdir -p "$SSBOX/.claude/tmp"
+printf 'a brief worth keeping' > "$SSBOX/.claude/tmp/handoff-payload-77777"
+HOME="$SSBOX" PATH="$NOJQ" CLAUDE_HANDOFF_ID=77777 sh "$SS_HOOK" >/dev/null 2>&1
+if [ -f "$SSBOX/.claude/tmp/handoff-payload-77777" ]; then
+  ok "J: SessionStart keeps the payload when it cannot emit it"
+else
+  no "J: SessionStart destroyed the payload after failing to emit it"
+fi
+rm -rf "$SSBOX"
 
 # Case F — no eval query may itself trigger the hook.
 #
