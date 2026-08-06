@@ -196,5 +196,46 @@ RC2=$?
   && ok "a uniformly passing set exits 0 with a zero noise floor" \
   || no "uniform pass did not exit clean (rc=$RC2)"
 
+# --- a run's results must survive the run (BL-014) ------------------------
+# The report prints only after every unit completes, and the results directory
+# is a mktemp cleaned by trap. A ~67-minute job interrupted at minute 60
+# therefore produced NOTHING: every verdict and every fire time went with it.
+# Observed for real on 2026-08-06 — a run killed at 54 of 99 units left no
+# output at all, and the data had to be scraped from the live process by hand.
+#
+# --results-dir makes the directory the caller's, and progress.tsv is appended
+# per unit as it completes, so an interrupted run still leaves what it measured.
+write_stub
+KEEP="$SANDBOX/keep-results"
+OUT5="$SANDBOX/out5.txt"
+PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
+  --eval-set "$SANDBOX/set.json" --reps 3 --jobs 9 --timeout 1 \
+  --results-dir "$KEEP" > "$OUT5" 2>&1
+
+[ -d "$KEEP" ] \
+  && ok "--results-dir survives a completed run" \
+  || no "--results-dir was deleted; an interrupted run would leave nothing"
+
+PROG="$KEEP/progress.tsv"
+if [ -f "$PROG" ]; then
+  PLINES=$(wc -l < "$PROG" | tr -d ' ')
+  [ "$PLINES" = 9 ] \
+    && ok "progress.tsv holds one line per unit (9)" \
+    || no "progress.tsv has $PLINES lines, expected 9 (3 queries x 3 reps)"
+  # The fire time is the column the killed run made expensive to lose.
+  # columns: unit, mode, verdict, fire turn, fire seconds
+  awk -F'\t' '$4 == "turn1" && $5 == 7 { found = 1 } END { exit !found }' "$PROG" \
+    && ok "progress.tsv records the fire turn and elapsed seconds" \
+    || no "progress.tsv lost the fire timing — got: $(head -2 "$PROG" | tr '\t' '|' | tr '\n' ' ')"
+  # Verdicts must be there too, or a partial run says nothing about pass/fail.
+  grep -q 'executed-immediately' "$PROG" \
+    && ok "progress.tsv records the verdict alongside the timing" \
+    || no "progress.tsv has no verdict column"
+else
+  no "progress.tsv was never written"
+  no "progress.tsv was never written (timing)"
+  no "progress.tsv was never written (verdict)"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
