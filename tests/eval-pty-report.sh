@@ -115,6 +115,10 @@ IN=$(cat)
 pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
 FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
 FIRED=$(pathof fired)
+# The turn-1 transcript is whatever expect writes to STDOUT — the caller
+# redirects it into the file. So the stub earns its transcript the same way the
+# real thing does, by printing, rather than by knowing a path.
+printf 'stub turn-1 transcript\n'
 [ -n "$FLAG" ] || exit 0
 BASE=${FLAG##*/}; REP=${BASE##*-}; REST=${BASE%-*}; QN=${REST##*-}
 # Inverted latency: earlier queries finish LAST, so completion order differs
@@ -296,6 +300,34 @@ else
   no "progress.tsv was never written"
   no "progress.tsv was never written (timing)"
   no "progress.tsv was never written (verdict)"
+fi
+
+# --- turn 1 must be recoverable, for EVERY unit (BL-021) ------------------
+# The harness scores `propose` from the presence or absence of a marker file,
+# which cannot distinguish "held off and offered the handoff" from "answered
+# something else entirely". Its own header calls that out: a model that ignores
+# a propose query and is then pulled in by the confirmation scores a false `ok`.
+#
+# That stopped being hypothetical on 2026-08-06. BL-020's [29] scored 3/3 under
+# an imperative confirmation and 0/3 under a bare one, and NOTHING in the run
+# could say what turn 1 had actually done — so the defect could be measured and
+# not diagnosed. Same for the three "give me a prompt" entries at 0/15: never
+# offered, or offered and not followed through, are one observation here.
+#
+# So every unit now leaves its turn-1 transcript. Every unit, not just failures:
+# a false `ok` is precisely the verdict whose text you need, and keeping only
+# the reds would leave it unauditable.
+# NON-EMPTY, not merely present. The shell creates the file by opening the
+# redirect, so counting files would pass against a harness that captured
+# nothing — which is exactly the first implementation of this: `log_file`
+# records nothing while `log_user` is 0, and it produced nine 0-byte files that
+# a presence check would have called green.
+TURN1S=$(find "$KEEP" -name '*.turn1' -size +0 2>/dev/null | wc -l | tr -d ' ')
+if [ "$TURN1S" = 9 ]; then
+  ok "every unit leaves a NON-EMPTY turn-1 transcript (9)"
+else
+  EMPTY=$(find "$KEEP" -name '*.turn1' 2>/dev/null | wc -l | tr -d ' ')
+  no "found $TURN1S non-empty turn-1 transcripts of $EMPTY files, expected 9 — propose verdicts stay undiagnosable without them"
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

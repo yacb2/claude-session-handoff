@@ -254,15 +254,23 @@ run_one() {
   ALIVE_FILE="$TMP_DIR/handoff-alive-$HANDOFF_ID"
   TURN1_FILE="$TMP_DIR/handoff-turn1-$HANDOFF_ID"
   FIRED_FILE="$TMP_DIR/handoff-fired-$HANDOFF_ID"
+  # Turn 1's own words, next to the verdict. Lives in the results dir, not in
+  # $TMP_DIR with the markers: it is evidence to read afterwards, not a signal
+  # the run consumes, and it must not be swept by the marker cleanup below.
+  TURN1_LOG="$RESULT_FILE.turn1"
   # One list, used before and after. Enumerating the markers twice is how one
   # of them survives into the next rep — and reps of a query now run
   # concurrently, which is the contamination the per-rep id exists to stop.
   MARKERS="$FLAG_FILE $PAYLOAD_FILE $EXIT_TRIGGER $ALIVE_FILE $TURN1_FILE $FIRED_FILE"
   rm -f $MARKERS
 
-  CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >/dev/null 2>&1 || true
+  CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >"$TURN1_LOG" 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
-    log_user 0
+    # log_user 1, not 0, and expect's stdout is redirected to the turn-1
+    # transcript by the caller above. The log_file command was tried first and
+    # records NOTHING while log_user is 0 — nine 0-byte files, which the stub
+    # could never have revealed, because the stub is not expect.
+    log_user 1
     spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL
     # Wait for the session to be up before starting the clock, so the measured
     # window is model time and not startup time. A session that never reaches
@@ -287,6 +295,11 @@ run_one() {
       close \$fh
     }
     exec touch "$ALIVE_FILE"
+    # Stop capturing HERE, so the file holds turn 1 and nothing else. Left on,
+    # it would also record the confirmation and whatever followed, and the one
+    # question it exists to answer — what did the model do BEFORE being
+    # confirmed? — would need the reader to find the seam by eye.
+    log_user 0
     # Turn 2, only for propose, and only if turn 1 correctly held off.
     # The confirmation is a bare token on purpose — see the note above run_one.
     if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
