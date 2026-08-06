@@ -91,11 +91,16 @@ Drafting rules:
 
 ### Step 2 — execute
 
-Check `$CLAUDE_HANDOFF_ID`. If it is not set, the wrapper is not running — tell the user and stop.
-
-With the payload ready, run via Bash:
+With the payload ready, run via Bash. The `$CLAUDE_HANDOFF_ID` check is part of the block, not a
+note above it: unset, every path below still runs and writes `handoff-payload-`, `handoff-flag-`
+and `handoff-exit-` with an empty suffix — files no wrapper is watching — and then reports success.
 
 ```sh
+if [ -z "$CLAUDE_HANDOFF_ID" ]; then
+  echo "handoff: wrapper not detected. Launch claude via the shell function that claude-session-handoff installs." >&2
+  exit 1
+fi
+
 mkdir -p "$HOME/.claude/tmp"
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"

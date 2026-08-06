@@ -300,5 +300,85 @@ if command -v jq >/dev/null 2>&1; then
   fi
 fi
 
+# Case L — the skill's runnable block must refuse to run unwrapped.
+#
+# SKILL.md Step 2 carried the `$CLAUDE_HANDOFF_ID` check as PROSE above the
+# block, while commands/handoff.md had the same check INSIDE its block. With
+# the variable unset the skill's block therefore still ran: it wrote
+# handoff-payload-, handoff-flag- and handoff-exit- with a BARE suffix — files
+# no wrapper is watching — and then reported success. The session stays open
+# and nothing is seeded, which looks like the model failing rather than a
+# missing guard.
+#
+# Extracted from the markdown rather than duplicated here: a copy would let the
+# file drift while the test kept passing.
+SKILL_MD="$REPO/skills/session-handoff/SKILL.md"
+SKILL_BLOCK=$(awk '
+  /^### Step 2/      { insec = 1 }
+  insec && /^```sh$/ { inblock = 1; next }
+  inblock && /^```$/ { exit }
+  inblock            { print }
+' "$SKILL_MD")
+
+if [ -z "$SKILL_BLOCK" ]; then
+  no "L: could not extract the Step 2 runnable block from SKILL.md"
+else
+  L_HOME=$(mktemp -d)
+  L_OUT=$(HOME="$L_HOME" CLAUDE_HANDOFF_ID="" sh -c "$SKILL_BLOCK" 2>&1)
+  L_RC=$?
+  L_LEAKED=$(find "$L_HOME" -name 'handoff-*' 2>/dev/null | wc -l | tr -d ' ')
+  rm -rf "$L_HOME"
+
+  if [ "$L_RC" -ne 0 ]; then
+    ok "L: the skill's block fails when CLAUDE_HANDOFF_ID is unset"
+  else
+    no "L: the skill's block exited 0 unwrapped — it reports success having seeded nothing"
+  fi
+  if [ "$L_LEAKED" = 0 ]; then
+    ok "L: no bare-suffix sentinel files are written unwrapped"
+  else
+    no "L: wrote $L_LEAKED bare-suffix handoff file(s) no wrapper will ever read"
+  fi
+fi
+
+# Case M — /handoff's allowed-tools must cover every command its own block runs.
+#
+# A permission prompt on the one command whose entire value is running
+# unattended. The block used `[ ... ]` and `echo`, neither of which the
+# frontmatter declared — and `Bash(test:*)` does not cover the `[` spelling,
+# they are different command words to the matcher.
+#
+# Rather than bet on how the matcher splits a multi-line script, the block is
+# written to use only forms the frontmatter declares by name. This check is the
+# mechanical half: it fails if the block reaches for an undeclared word again.
+CMD_MD="$REPO/commands/handoff.md"
+ALLOWED=$(awk '/^allowed-tools:/ { sub(/^allowed-tools:[[:space:]]*/, ""); print; exit }' "$CMD_MD")
+CMD_BLOCK=$(awk '
+  /^```sh$/ { inblock = 1; next }
+  inblock && /^```$/ { exit }
+  inblock   { print }
+' "$CMD_MD")
+
+M_MISSING=""
+for W in test printf mkdir cat touch; do
+  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|[:space:]])$W([[:space:]]|$)" || continue
+  case "$ALLOWED" in
+    *"Bash($W:"*) ;;
+    *) M_MISSING="$M_MISSING $W" ;;
+  esac
+done
+# `[` and `echo` are the two the block must not use: `[` because Bash(test:*)
+# does not match it, `echo` because only printf is declared.
+for W in '\[' 'echo'; do
+  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|[:space:]])$W([[:space:]]|$)" \
+    && M_MISSING="$M_MISSING undeclarable:$W"
+done
+
+if [ -z "$M_MISSING" ]; then
+  ok "M: every command in /handoff's block is declared in allowed-tools"
+else
+  no "M: /handoff would prompt for permission on:$M_MISSING"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
