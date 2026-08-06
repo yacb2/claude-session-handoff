@@ -147,6 +147,24 @@ trap 'rm -f "$SETTINGS_OVERLAY"; rm -rf "$RESULT_DIR"' EXIT
 #              confirmation. That is exactly SKILL.md's "Only execute after
 #              they confirm."
 #
+# LIVENESS IS MEASURED, NOT ASSUMED. Two markers the expect script writes:
+#
+#   handoff-alive-<id>  touched once turn 1 has genuinely completed in a
+#                       session that reached its prompt.
+#   handoff-turn1-<id>  touched iff the skill fired during turn 1.
+#
+# Without the first, "the skill correctly declined" and "no session was ever
+# spawned" are the SAME observation — marker absent — so an `ignore` query
+# scores a pass off a harness that did nothing. A set of `ignore` entries would
+# then exit 0, fully green, having measured nothing. Any of a typo'd --model,
+# an expired token, a changed startup banner or an unbalanced brace in a query
+# produces exactly that.
+#
+# Without the second, `propose` is classified from the ABSENCE of a file, so an
+# expect that dies before turn 2 scores `executed-immediately` — a false red
+# pointing straight at SKILL.md's propose policy, which someone would then
+# "fix". The turn-1 outcome is now recorded positively instead.
+#
 # Verdict codes, kept distinct because they have different causes and the
 # summary must not collapse them (BL-010): `propose` fails in two opposite
 # ways, and only `executed-immediately` is a trigger-policy defect.
@@ -156,6 +174,7 @@ trap 'rm -f "$SETTINGS_OVERLAY"; rm -rf "$RESULT_DIR"' EXIT
 #   executed-unasked          (ignore:  fired on a query it should leave alone)
 #   executed-immediately      (propose: skipped the ask — policy defect)
 #   no-execute-after-confirm  (propose: held off, then failed to follow through)
+#   harness-error             (the session never ran; NEVER counts as a pass)
 #
 # Known weak spot, recorded rather than papered over: a model that ignores a
 # `propose` query entirely and then executes on the bare confirmation scores a
@@ -170,16 +189,19 @@ run_one() {
   FLAG_FILE="$TMP_DIR/handoff-flag-$HANDOFF_ID"
   PAYLOAD_FILE="$TMP_DIR/handoff-payload-$HANDOFF_ID"
   EXIT_TRIGGER="$TMP_DIR/handoff-exit-$HANDOFF_ID"
-  HELD_FILE="$TMP_DIR/handoff-held-$HANDOFF_ID"
-  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$HELD_FILE"
+  ALIVE_FILE="$TMP_DIR/handoff-alive-$HANDOFF_ID"
+  TURN1_FILE="$TMP_DIR/handoff-turn1-$HANDOFF_ID"
+  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$ALIVE_FILE" "$TURN1_FILE"
 
   CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >/dev/null 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
     log_user 0
     spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL
     # Wait for the session to be up before starting the clock, so the measured
-    # window is model time and not startup time.
-    expect -timeout 60 -re {auto mode|Welcome back|Try "}
+    # window is model time and not startup time. A session that never reaches
+    # its prompt must NOT fall through and be scored — it exits without
+    # touching the liveness marker, which the caller reads as harness-error.
+    expect -timeout 60 -re {auto mode|Welcome back|Try "} {} timeout { exit 3 }
     send -- {$QUERY}
     send -- "\x1b\[13u"
     set deadline [expr {[clock seconds] + $TIMEOUT}]
@@ -187,9 +209,13 @@ run_one() {
       expect -timeout 1 -re ".+"
       if {[file exists "$FLAG_FILE"]} { break }
     }
+    # Record turn 1's outcome POSITIVELY, then declare the run live. Order
+    # matters: turn1 before alive means a crash between them still reads as
+    # harness-error rather than as a turn-1 miss.
+    if {[file exists "$FLAG_FILE"]} { exec touch "$TURN1_FILE" }
+    exec touch "$ALIVE_FILE"
     # Turn 2, only for propose, and only if turn 1 correctly held off.
     if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
-      exec touch "$HELD_FILE"
       send -- {sí, hazlo / yes, go ahead}
       send -- "\x1b\[13u"
       set deadline2 [expr {[clock seconds] + $TIMEOUT}]
@@ -203,18 +229,25 @@ run_one() {
     expect eof
 EXP
 
-  FIRED=1; [ -f "$FLAG_FILE" ] && FIRED=0
-  HELD=1;  [ -f "$HELD_FILE" ] && HELD=0
-  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$HELD_FILE"
+  FIRED=1;  [ -f "$FLAG_FILE" ]  && FIRED=0
+  FIRED1=1; [ -f "$TURN1_FILE" ] && FIRED1=0
+  ALIVE=1;  [ -f "$ALIVE_FILE" ] && ALIVE=0
+  rm -f "$FLAG_FILE" "$PAYLOAD_FILE" "$EXIT_TRIGGER" "$ALIVE_FILE" "$TURN1_FILE"
 
-  case "$MODE" in
-    execute) [ "$FIRED" = 0 ] && CODE="ok" || CODE="never-executed" ;;
-    ignore)  [ "$FIRED" = 1 ] && CODE="ok" || CODE="executed-unasked" ;;
-    propose) if [ "$HELD" != 0 ]; then CODE="executed-immediately"
-             elif [ "$FIRED" = 0 ]; then CODE="ok"
-             else CODE="no-execute-after-confirm"; fi ;;
-    *)       CODE="unknown-mode" ;;
-  esac
+  if [ "$ALIVE" != 0 ]; then
+    # Nothing was measured. This must never resolve to `ok`, and in particular
+    # must not resolve to `ok` for `ignore`, whose pass condition is an absence.
+    CODE="harness-error"
+  else
+    case "$MODE" in
+      execute) [ "$FIRED" = 0 ] && CODE="ok" || CODE="never-executed" ;;
+      ignore)  [ "$FIRED" = 1 ] && CODE="ok" || CODE="executed-unasked" ;;
+      propose) if [ "$FIRED1" = 0 ]; then CODE="executed-immediately"
+               elif [ "$FIRED" = 0 ]; then CODE="ok"
+               else CODE="no-execute-after-confirm"; fi ;;
+      *)       CODE="unknown-mode" ;;
+    esac
+  fi
   printf '%s\n' "$CODE" > "$RESULT_FILE"
 }
 
@@ -282,7 +315,7 @@ TOTAL=0; HITS=0
 H_execute=0; T_execute=0
 H_propose=0; T_propose=0
 H_ignore=0;  T_ignore=0
-C_never=0; C_unasked=0; C_immediate=0; C_noconfirm=0
+C_never=0; C_unasked=0; C_immediate=0; C_noconfirm=0; C_harness=0
 INTERMITTENT=0
 FLAT_FAIL=0
 
@@ -303,6 +336,7 @@ while IFS="$(printf '\t')" read -r QN QMODE QTEXT; do
       executed-unasked)         C_unasked=$((C_unasked + 1)) ;;
       executed-immediately)     C_immediate=$((C_immediate + 1)) ;;
       no-execute-after-confirm) C_noconfirm=$((C_noconfirm + 1)) ;;
+      *)                        C_harness=$((C_harness + 1)) ;;
     esac
     [ "$CODE" = "ok" ] || CODES="$CODES $CODE"
   done
@@ -339,12 +373,18 @@ echo "#   never executed             : $C_never"
 echo "#   executed unasked (ignore)  : $C_unasked"
 echo "#   executed immediately       : $C_immediate"
 echo "#   no execute after confirm   : $C_noconfirm"
+echo "#   HARNESS ERROR (not measured): $C_harness"
 echo
 # --- the reportability rule ------------------------------------------------
 # Each intermittent query is, by demonstration, capable of landing on a
 # different count next run. So the summary can move by at least that many
 # passes with nothing having changed. Any delta inside this band is noise, and
 # reporting it as an effect is the defect BL-010 was filed for.
+if [ "$C_harness" -gt 0 ]; then
+  echo "# !! $C_harness rep(s) never ran a session. Those are NOT results — the numbers"
+  echo "#    above are measured over fewer reps than requested. Fix the harness first."
+  echo
+fi
 echo "# intermittent queries: $INTERMITTENT  ·  consistently failing: $FLAT_FAIL"
 echo "# NOISE FLOOR: +/- $INTERMITTENT passes out of $TOTAL."
 echo "#   A before/after difference of $INTERMITTENT passes or fewer is NOT reportable"
