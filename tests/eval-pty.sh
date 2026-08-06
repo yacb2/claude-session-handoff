@@ -231,6 +231,17 @@ trap 'exit 143' TERM
 # Every `propose` number measured before that change is an UPPER BOUND, the
 # 2026-08-06 baseline's `propose 5/6` included. Do not compare across it: it is
 # not noise, it is a different ruler.
+#
+# THE TURN-2 CONFIRMATION IS A BARE TOKEN, AND THAT IS LOAD-BEARING. It used to
+# be a bilingual string ending in "hazlo" / "go ahead" — an imperative to act,
+# which fires the handoff on its own regardless of what turn 1 said. Measured on
+# one query with nothing else changed: 3/3 with the imperative, 0/3 with a bare
+# token. Pinned by eval-pty-report.sh; read BL-021 before editing it.
+#
+# Note this lives OUT here, not next to the send. Everything between `<<EXP` and
+# `EXP` is expanded by the shell first, so a backtick in a Tcl comment there is
+# command substitution — which is exactly how this note, in its first form, ran
+# the old confirmation string as a shell command on every unit of a 45-unit run.
 run_one() {
   HANDOFF_ID="$1"
   QUERY="$2"
@@ -277,12 +288,7 @@ run_one() {
     }
     exec touch "$ALIVE_FILE"
     # Turn 2, only for propose, and only if turn 1 correctly held off.
-    #
-    # A BARE token, and the wording is load-bearing. This used to send
-    # `sí, hazlo / yes, go ahead`, whose "hazlo"/"go ahead" is an imperative to
-    # act — and the imperative was producing the passes by itself, not the
-    # proposal it was supposed to be confirming. Pinned by eval-pty-report.sh;
-    # see BL-021 before touching it.
+    # The confirmation is a bare token on purpose — see the note above run_one.
     if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
       send -- {ok}
       send -- "\x1b\[13u"
