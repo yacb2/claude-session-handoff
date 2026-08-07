@@ -157,8 +157,11 @@ for HP in "$PATH" "$NOJQ"; do
   fi
 done
 
-# Case I — bare `handoff` means "fresh session, NO seeded context" (the hook's
-# own header says so). CLAUDE_HANDOFF_ID is the wrapper PID and is stable for
+# Case I — bare `handoff` with NO transcript to read falls back to a clean
+# session. This was the unconditional behaviour until the transcript tail landed;
+# it is now the fallback arm (no transcript_path, no jq, or no completed reply),
+# and the assertion below is unchanged because the guard it protects is:
+# CLAUDE_HANDOFF_ID is the wrapper PID and is stable for
 # the whole dispatch loop, so the payload path is identical for every session
 # that wrapper launches. An orphaned payload therefore survives until wrapper
 # exit, and the wrapper would then announce "N bytes de contexto sembrado" and
@@ -171,6 +174,76 @@ if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_EXISTS" = 0 ]; then
   ok "I: bare handoff clears a stale payload instead of inheriting it"
 else
   no "I: stale payload survived a payload-less handoff (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Cases N/O/P — the three payload shapes of the trigger.
+#
+# The fixture is one COMPLETED turn: a lead-in text line, a tool_use line, a
+# tool_result, then the reply. That shape is the whole point — an assistant turn
+# emits several lines, and only grouping by line-without-tool_use picks the reply
+# instead of the lead-in. A fixture with a single assistant line would pass under
+# a naive "last text block" filter too, and prove nothing.
+TAILDIR=$(mktemp -d)
+trap 'rm -rf "$NOJQ" "$TAILDIR"' EXIT
+FIXTURE="$TAILDIR/transcript.jsonl"
+cat > "$FIXTURE" <<'FIXEOF'
+{"type":"user","message":{"content":"fix the parser"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"LEAD_IN_MUST_NOT_WIN"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"..."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"THE_REPLY line one\nTHE_REPLY line two"}]}}
+FIXEOF
+TAIL_PROMPT=$(printf 'handoff' | jq -Rs --arg t "$FIXTURE" '{prompt:., transcript_path:$t}')
+
+# Case N — bare `handoff` seeds the previous session's last REPLY, labelled as a
+# raw tail. The label is asserted, not decorative: the SessionStart hook wraps
+# whatever it finds with "treat it as authoritative context", so an unlabelled
+# tail reads to the next session as a curated brief it can act on.
+run_hook "$TAIL_PROMPT" "$TEST_PID" "$PATH"
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_EXISTS" = 1 ] \
+  && contains "$PAYLOAD_OUT" "THE_REPLY line one" \
+  && contains "$PAYLOAD_OUT" "THE_REPLY line two" \
+  && ! contains "$PAYLOAD_OUT" "LEAD_IN_MUST_NOT_WIN" \
+  && contains "$PAYLOAD_OUT" "NOT a curated handoff brief"; then
+  ok "N: bare handoff seeds the last reply, labelled, and skips the lead-in"
+else
+  no "N: transcript tail wrong (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Case O — `handoff --clean` is the way back to an empty session, and must beat
+# an available transcript. It arrives as PAYLOAD="--clean", so without its own
+# branch it would be written out as a one-word brief. Seeded with a stale
+# payload so this also covers the Case I guard on the --clean arm.
+CLEAN_PROMPT=$(printf 'handoff --clean' | jq -Rs --arg t "$FIXTURE" '{prompt:., transcript_path:$t}')
+SEED_PAYLOAD='stale brief from an earlier handoff'
+run_hook "$CLEAN_PROMPT" "$TEST_PID" "$PATH"
+SEED_PAYLOAD=""
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_EXISTS" = 0 ]; then
+  ok "O: handoff --clean clears the payload and ignores the transcript"
+else
+  no "O: --clean seeded anyway (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Case P — an explicit brief still wins over the transcript. The curated text is
+# the whole point of `handoff: <text>`; silently appending or preferring a tail
+# would corrupt a brief the user wrote by hand.
+BRIEF_PROMPT=$(printf 'handoff: a hand written brief' | jq -Rs --arg t "$FIXTURE" '{prompt:., transcript_path:$t}')
+run_hook "$BRIEF_PROMPT" "$TEST_PID" "$PATH"
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = "a hand written brief" ]; then
+  ok "P: an explicit brief beats the transcript tail, verbatim"
+else
+  no "P: explicit brief was not preserved (out=[$PAYLOAD_OUT])"
+fi
+
+# Case Q — no jq, transcript present: the tail cannot be parsed, so the handoff
+# must still FIRE and fall back to a clean session. Degrading to clean is the
+# designed outcome; failing to hand off is not. Pairs with Case B, which proves
+# the same PATH still triggers on a plain `handoff`.
+run_hook "$TAIL_PROMPT" "$TEST_PID" "$NOJQ"
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_EXISTS" = 0 ]; then
+  ok "Q: no jq degrades the tail to a clean session, handoff still fires"
+else
+  no "Q: no-jq tail path misbehaved (triggered=$TRIGGERED exists=$PAYLOAD_EXISTS)"
 fi
 
 # Case J — the SessionStart hook must not destroy the payload before it has
