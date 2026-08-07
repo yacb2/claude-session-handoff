@@ -82,16 +82,31 @@ Use this minimal structure. **Every sentence must be information the next sessio
 <only the non-obvious ones — agreed conventions, rejected tradeoffs>
 
 ## Next concrete step
-<single, actionable>
+<single, actionable — or, if the next step is a decision only the user can make,
+name it as such: the options, what each costs, and what is already verified>
 
 ## Constraints / gotchas
 <what the next session would trample if it didn't know>
 ```
 
 Drafting rules:
-- Be terse. Skip any section that adds nothing.
+- Be terse. Skip any section that adds nothing — **except `Next concrete step`**, which is never
+  skipped.
 - Zero filler, zero obvious explanations.
 - If the user already provided a prompt, use it as-is — do not rewrite it.
+
+**Never manufacture a next step to fill that section.** Answer one question — *is the next step
+mine or the user's?* — and write the answer down. A recorded fork is a valid answer; an implicit
+one is not. Both halves of that matter: skipping the section hides a fork the next session then
+has to rediscover, and inventing a single step to fill it makes the next session execute a
+decision the user never made.
+
+The failure this prevents, observed: a run ended with its remaining items blocked *by decision*
+and a large batch unpublished — a genuine fork. The section was skipped as adding nothing, so the
+new session inferred the fork from an intentless first message and opened with *"'Continue' can
+mean two very different things here"*. Same fork, but blamed on the user's word instead of read
+off the state. Recorded, it opens as *"the next step is your call: A or B"* — which is the
+handoff working, not failing.
 
 ### Step 2 — execute
 
