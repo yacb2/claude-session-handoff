@@ -113,6 +113,35 @@ into `Constraints / gotchas` as a prohibition — *"do not push without an expli
 a choice was waiting, and never surfaces the decision at all. A fork belongs in `Next concrete
 step` as a fork.
 
+**When the user is present, resolve the fork here instead of recording it.** They asked for this
+handoff, so they are one turn away. Ask which thread continues, then hand off next turn with their
+answer written in as the single next step — the new session opens executing instead of opening on
+a menu. Recording is the fallback for when asking is impossible, not the default.
+
+**This is the one carve-out to "Direct trigger — execute immediately".** It has to be, or it
+never fires: a Direct request is exactly the case where the user is present, and reading Direct
+as winning outright collapses the carve-out to nothing. Executing is still the default; a live
+fork is the sole reason to spend a turn first.
+
+Three conditions, all of them: a genuine fork exists; this is a Direct or Proactive handoff the
+user asked for in this conversation; and what you are asking is *which thread continues*. Fail
+any and you record the fork instead.
+
+**Ask once — that is a rule about how you ask, not about how forked the state is.** Several open
+decisions do not become several questions and do not disqualify asking; they become one question
+offering them as options. A heavily forked state is when asking is worth the most, so reading
+"one question" as "only if there is exactly one decision" gets it backwards.
+
+Never ask in the mandated-by-a-running-process case — no one is at the keyboard, and stopping a
+run to ask is the exact failure that case exists to prevent. Never ask on the `handoff:` hook
+path either; it bypasses the model entirely, so there is nothing to ask with.
+
+The bound matters because the mechanism gives you no third option: touching `$EXIT_TRIGGER` ends
+this session in ~0.5s, so asking *is* postponing the handoff by a turn. Deferring a handoff the
+user asked for, to ask them something, is how this skill's worst failure mode looks from the
+outside — answering a request for the move with words instead. So: ask only about which thread,
+never about whether to hand off, and never twice.
+
 ### Step 2 — execute
 
 With the payload ready, run via Bash. The `$CLAUDE_HANDOFF_ID` check is part of the block, not a
