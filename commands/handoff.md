@@ -40,7 +40,9 @@ Sé breve. Cada frase tiene que ganarse su lugar. La única sección que nunca s
 respuesta. Una bifurcación registrada es una respuesta válida; una implícita no lo es.
 Las dos mitades importan: omitir la sección esconde una bifurcación que la sesión nueva
 tiene que redescubrir sola, e inventar un paso único para llenar el hueco hace que ejecute
-una decisión que el usuario nunca tomó.
+una decisión que el usuario nunca tomó. Cuidado con la vía silenciosa: degradar la
+bifurcación a `Restricciones / gotchas` como prohibición — *"no publiques sin permiso"* —
+deja a la sesión nueva leyendo una regla donde había una decisión esperando.
 
 ## Ejecuta el handoff
 

@@ -102,11 +102,16 @@ has to rediscover, and inventing a single step to fill it makes the next session
 decision the user never made.
 
 The failure this prevents, observed: a run ended with its remaining items blocked *by decision*
-and a large batch unpublished — a genuine fork. The section was skipped as adding nothing, so the
-new session inferred the fork from an intentless first message and opened with *"'Continue' can
-mean two very different things here"*. Same fork, but blamed on the user's word instead of read
-off the state. Recorded, it opens as *"the next step is your call: A or B"* — which is the
-handoff working, not failing.
+and a large batch unpublished — a genuine fork. The brief did not record it, so the new session
+inferred it from an intentless first message and opened with *"'Continue' can mean two very
+different things here"*. Same fork, but blamed on the user's word instead of read off the state.
+Recorded, it opens as *"the next step is your call: A or B"* — the handoff working, not failing.
+
+Watch the quieter route to the same place: instead of skipping the section, the fork gets demoted
+into `Constraints / gotchas` as a prohibition — *"do not push without an explicit ask"* — while
+`Next concrete step` holds a manufactured action. The next session then reads a rule to obey where
+a choice was waiting, and never surfaces the decision at all. A fork belongs in `Next concrete
+step` as a fork.
 
 ### Step 2 — execute
 
