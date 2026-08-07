@@ -27,13 +27,20 @@ Revisa `$ARGUMENTS`:
 <lista corta — solo lo no obvio del código>
 
 ## Próximo paso concreto
-<acción única, accionable>
+<acción única, accionable — o, si el próximo paso es una decisión que solo el
+usuario puede tomar, nómbrala como tal: las opciones, qué cuesta cada una, y qué
+está ya verificado>
 
 ## Restricciones / gotchas
 <lo que la próxima sesión pisaría si no lo supiera>
 ```
 
-Sé breve. Cada frase tiene que ganarse su lugar.
+Sé breve. Cada frase tiene que ganarse su lugar. La única sección que nunca se omite es
+`Próximo paso concreto`: contesta *¿el próximo paso es mío o del usuario?* y escribe la
+respuesta. Una bifurcación registrada es una respuesta válida; una implícita no lo es.
+Las dos mitades importan: omitir la sección esconde una bifurcación que la sesión nueva
+tiene que redescubrir sola, e inventar un paso único para llenar el hueco hace que ejecute
+una decisión que el usuario nunca tomó.
 
 ## Ejecuta el handoff
 
