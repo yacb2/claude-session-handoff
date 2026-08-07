@@ -44,6 +44,17 @@ una decisión que el usuario nunca tomó. Cuidado con la vía silenciosa: degrad
 bifurcación a `Restricciones / gotchas` como prohibición — *"no publiques sin permiso"* —
 deja a la sesión nueva leyendo una regla donde había una decisión esperando.
 
+**Si el usuario está presente, resuelve la bifurcación aquí en vez de registrarla.** Acaba de
+pedir el handoff: está a un turno. Pregunta qué hilo sigue y haz el handoff en el turno
+siguiente con su respuesta escrita como paso único — la sesión nueva abre ejecutando, no
+abre con un menú. Registrarla es el fallback para cuando preguntar no se puede.
+
+Pregunta **una sola vez**, y solo sobre **qué hilo sigue** — nunca sobre si hacer el handoff.
+"Una sola vez" es cómo preguntas, no cuán bifurcado está el estado: varias decisiones abiertas
+no son varias preguntas ni descalifican preguntar, son **una** pregunta con varias opciones.
+Tocar `$EXIT_TRIGGER` cierra la sesión en ~0.5s, así que preguntar pospone el handoff un turno:
+hazlo solo cuando de verdad hay bifurcación.
+
 ## Ejecuta el handoff
 
 Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: `$CLAUDE_HANDOFF_ID` tiene que estar seteado — si no, el wrapper no está corriendo y no podemos cerrar.
