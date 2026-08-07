@@ -171,12 +171,20 @@ After touching `$EXIT_TRIGGER`, do not emit any more output — the wrapper's wa
 
 Why `touch` instead of signalling the wrapper directly: the new sandbox/automode classifier escalates any process-signal primitive regardless of allowlist rules. The wrapper now owns the termination — it spawns a background watcher that polls `$EXIT_TRIGGER` and signals claude. The skill only needs the benign `touch` capability.
 
-### Step 3 — zero-token alternative
+### Step 3 — zero-token alternatives
 
-If the user already has the prompt drafted and wants to fire the handoff without spending tokens on this turn, suggest they type directly:
+The `UserPromptSubmit` hook intercepts these before the model runs, so the turn costs nothing:
 
-```
-handoff: <their prompt here>
-```
+| Typed | Seeds |
+|---|---|
+| `handoff: <text>` | that text, verbatim — the user's own brief |
+| `handoff` | the previous session's last reply, read from the transcript by the hook |
+| `handoff --clean` | nothing; a genuinely empty session |
 
-The `UserPromptSubmit` hook intercepts it and runs the handoff without going through the model.
+Suggest `handoff: <text>` when the user already has the prompt drafted.
+
+Suggest bare `handoff` for the case this skill cannot serve: a session so long that prompting it
+at all is expensive. Drafting a good brief costs one request over the whole conversation, and
+with a cold cache that is exactly what the user is trying to avoid. The tail is worse context
+than a drafted brief — it has no goal, state or next step — so it is the cheap path, not the
+good one. Offer it when the cost is the problem, not otherwise.

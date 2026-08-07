@@ -53,6 +53,15 @@ New session opens with the handoff context loaded.
 
 The hook intercepts it. No tokens consumed this turn. The new session opens with that text as seeded context.
 
+Two variants on the same path, also free:
+
+- **`handoff`** — seeds the previous session's **last reply**, which the hook reads straight out
+  of the transcript. For the case the skill cannot serve: a session long enough that prompting it
+  at all is expensive, where drafting a proper brief means one request over the whole
+  conversation with a cold cache. The payload is labelled as a raw tail, because it is one — no
+  goal, no state, no next step. Cheaper than a brief, and worse than one.
+- **`handoff --clean`** — seeds nothing. A genuinely empty session.
+
 ### 2. `/handoff [optional text]` (slash command)
 
 ```
@@ -161,6 +170,7 @@ variants each need a different sequence per emulator.
 
 - **Requires the wrapper**: the zero-token hook path only works when `claude` is launched via the `claude()` shell function the installer adds. If you start Claude from an IDE integration that calls the binary directly, use `/handoff` (the slash command) or the skill.
 - **Strict match on the hook**: the UserPromptSubmit hook fires only on `handoff` or `handoff: ...` at the start of the prompt (case-insensitive).
+- **Bare `handoff` needs `jq` and a completed reply**: the transcript tail is parsed with `jq`, and the extraction takes the last assistant line carrying no tool call. Without `jq`, without a `transcript_path`, or on a session that never produced a reply, the handoff still fires and falls back to a clean session.
 - **Payload is one-shot**: each handoff seeds exactly one session and is deleted afterwards. There is no persistent state.
 - **Skill trigger eval is conservative**: the `tests/eval-trigger.sh` harness uses `claude -p` with a slash-command shim, which under-measures side-effect-heavy skills like this one. Real interactive triggering is more reliable than the harness score.
 
