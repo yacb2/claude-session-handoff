@@ -155,6 +155,11 @@ if [ -z "$CLAUDE_HANDOFF_ID" ]; then
 fi
 
 mkdir -p "$HOME/.claude/tmp"
+
+# The payload is conversation content. Claude Code stores transcripts 0600; the
+# default umask would write this 0644, i.e. more readable than its source.
+umask 077
+
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
 EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"

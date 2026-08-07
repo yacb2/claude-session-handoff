@@ -1,7 +1,7 @@
 ---
 description: Cierra la sesión actual y abre una nueva, sembrando contexto de handoff
 argument-hint: [prompt opcional — si va vacío, Claude lo genera del contexto actual]
-allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Bash(cat:*), Write
+allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Bash(cat:*), Bash(umask:*), Write
 ---
 
 # /handoff
@@ -69,6 +69,11 @@ if test -z "$CLAUDE_HANDOFF_ID"; then
 fi
 
 mkdir -p "$HOME/.claude/tmp"
+
+# El payload es contenido de la conversación. Claude Code guarda los transcripts
+# en 0600; el umask por defecto lo escribiría 0644, más legible que su origen.
+umask 077
+
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
 EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"
