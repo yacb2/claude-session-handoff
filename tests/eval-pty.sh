@@ -53,7 +53,7 @@
 # Requires: expect, jq, the session-handoff skill installed in ~/.claude/skills/.
 # Usage:    ./tests/eval-pty.sh [--query-limit N] [--timeout SECONDS]
 #                               [--eval-set FILE] [--model NAME]
-#                               [--reps N] [--jobs N]
+#                               [--reps N] [--jobs N] [--allow-stale]
 
 set -u
 
@@ -73,6 +73,9 @@ REPS=3
 # concurrently on 2026-08-05 with no interference: CLAUDE_HANDOFF_ID is unique
 # per (pid, query, rep), so parallel sessions never share a marker file.
 JOBS=3
+# Measuring an installed skill that is not this repo's: legitimate, but never by
+# accident. See the staleness check below.
+ALLOW_STALE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -83,6 +86,7 @@ while [ $# -gt 0 ]; do
     --reps)        REPS="$2"; shift 2 ;;
     --results-dir) RESULTS_DIR_OVERRIDE="$2"; shift 2 ;;
     --jobs)        JOBS="$2"; shift 2 ;;
+    --allow-stale) ALLOW_STALE=1; shift ;;
     -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
@@ -97,6 +101,37 @@ command -v claude >/dev/null || { echo "claude not in PATH"; exit 1; }
 [ -f "$EVAL_SET" ] || { echo "eval set not found: $EVAL_SET"; exit 1; }
 [ -d "$HOME/.claude/skills/session-handoff" ] \
   || { echo "session-handoff skill not installed at ~/.claude/skills/"; exit 1; }
+
+# --- refuse to measure a stale install ------------------------------------
+# This harness scores the skill in ~/.claude/skills, never the repo copy. Edit
+# SKILL.md, skip ./install.sh, and the run measures the PREVIOUS policy while
+# reporting it as the new one — no error, no warning, a plausible number, and
+# an hour spent producing it.
+#
+# It was a written warning in CLAUDE.md before it was a check, which held right
+# up until it didn't: on 2026-08-06 the order had to be remembered by hand twice
+# in one session, once while a measurement was already running.
+#
+# --allow-stale exists for the one legitimate case — deliberately measuring an
+# installed variant that is not the repo's. It is a flag rather than silence so
+# it shows up in the command line, and therefore in whatever recorded that run.
+#
+# INSTALLED_SKILL_OVERRIDE is for the test sandbox only, matching install.sh's
+# RC_FILE_OVERRIDE / SHELL_NAME_OVERRIDE convention. Do not set it to point the
+# check somewhere else in a real run: the spawned claude reads ~/.claude
+# regardless, so the check would be comparing against a file nobody loads.
+INSTALLED_SKILL="${INSTALLED_SKILL_OVERRIDE:-$HOME/.claude/skills/session-handoff/SKILL.md}"
+REPO_SKILL="$REPO/skills/session-handoff/SKILL.md"
+if [ "$ALLOW_STALE" = 0 ] && [ -f "$REPO_SKILL" ] && [ -f "$INSTALLED_SKILL" ] \
+   && ! cmp -s "$INSTALLED_SKILL" "$REPO_SKILL"; then
+  echo "the installed skill differs from this repo's — run ./install.sh first." >&2
+  echo "  installed: $INSTALLED_SKILL" >&2
+  echo "  repo:      $REPO_SKILL" >&2
+  echo "This harness measures the INSTALLED skill, so running now would score the" >&2
+  echo "old policy and report it as the new one. Pass --allow-stale if the" >&2
+  echo "difference is deliberate." >&2
+  exit 1
+fi
 
 mkdir -p "$TMP_DIR"
 
