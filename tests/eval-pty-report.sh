@@ -330,5 +330,43 @@ else
   no "found $TURN1S non-empty turn-1 transcripts of $EMPTY files, expected 9 — propose verdicts stay undiagnosable without them"
 fi
 
+# --- a stale install must stop the run, not be scored -------------------
+# eval-pty.sh measures the skill in ~/.claude/skills, never the repo copy. So
+# editing SKILL.md and running the eval without ./install.sh scores the OLD
+# policy and reports it as the new one — silently, with a plausible number.
+#
+# CLAUDE.md carries this as a written warning, which is exactly the kind of
+# guard that works until the day it doesn't: on 2026-08-06 the sequence was
+# caught by hand, twice, with nothing enforcing it.
+#
+# Paired assertions on purpose. A check that only proves the abort would still
+# pass if it aborted unconditionally, which would break every real run — so the
+# control positive below feeds it a MATCHING install and requires it to proceed.
+write_stub
+printf '[{"query":"ALPHA staleness probe","expect":"execute"}]\n' > "$SANDBOX/set-stale.json"
+
+printf 'not the repo SKILL.md\n' > "$SANDBOX/stale-SKILL.md"
+OUT6="$SANDBOX/out6.txt"
+INSTALLED_SKILL_OVERRIDE="$SANDBOX/stale-SKILL.md" \
+  PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
+  --eval-set "$SANDBOX/set-stale.json" --reps 1 --jobs 1 --timeout 1 > "$OUT6" 2>&1
+RC6=$?
+if [ "$RC6" -ne 0 ] && grep -qi 'install' "$OUT6" && ! grep -q '^\[01\]' "$OUT6"; then
+  ok "a stale installed skill aborts the run before any unit is scored"
+else
+  no "stale install was not refused (rc=$RC6) — the run would score the old policy: $(head -3 "$OUT6" | tr '\n' ' ')"
+fi
+
+cp "$REPO/skills/session-handoff/SKILL.md" "$SANDBOX/fresh-SKILL.md"
+OUT7="$SANDBOX/out7.txt"
+INSTALLED_SKILL_OVERRIDE="$SANDBOX/fresh-SKILL.md" \
+  PATH="$SANDBOX/bin:$PATH" sh "$REPO/tests/eval-pty.sh" \
+  --eval-set "$SANDBOX/set-stale.json" --reps 1 --jobs 1 --timeout 1 > "$OUT7" 2>&1
+if grep -q '^\[01\]' "$OUT7"; then
+  ok "a matching install runs normally (the guard is not a blanket refusal)"
+else
+  no "CONTROL POSITIVE FAILED — a matching install was also refused, so the guard blocks every real run: $(head -3 "$OUT7" | tr '\n' ' ')"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
