@@ -37,6 +37,7 @@ soft|\*\*Soft signal
 promptask|\*\*Asked for the prompt
 tiebreak|\*\*Tie-break
 mandated|\*\*Mandated by a running process
+standing|\*\*Standing authorization recorded in the project
 donot|\*\*Do NOT use\*\*'
 
 # --- extract the two regions ----------------------------------------------

@@ -43,7 +43,11 @@ A question that asks for *options* rather than for the handoff — "is there ano
 
 **Mandated by a running process — execute, do not propose.** When an unattended run (plan execution, audit, loop) reaches its handoff step, the handoff is a mandated step of that process, not a suggestion to the user. Execute it. Do not ask — stopping to ask is the failure this case exists to prevent.
 
-This case is narrow by design and does not weaken the one above it: it requires an unattended run to be **in flight**. A conversational session never qualifies, no matter how long it has run or how clearly a fresh session would help — there, the soft-signal rule still applies and you propose first.
+This case is narrow by design and does not weaken the one above it: it requires an unattended run to be **in flight**. A conversational session never qualifies, no matter how long it has run or how clearly a fresh session would help — there, the soft-signal rule still applies and you propose first, unless the project records a standing authorization (next case).
+
+**Standing authorization recorded in the project — execute, do not re-ask.** When the project's own CLAUDE.md or memory carries a durable grant — e.g. *"handoff at context threshold without asking"* — the proactive and soft-signal cases escalate to execute: the confirmation was given once, durably, and asking again is exactly the friction the grant exists to remove. The grant's scope is this one move — opening the successor session with the seeded brief. It never extends to publishing, deploying, or anything else the session might also want to do.
+
+The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it: one usage-retro window caught the same user re-dictating this grant seven times in three days across three projects, and sessions still closing with "¿lanzo el handoff?".
 
 **Do NOT use** when:
 - The user only wants `/clear` (no context preserved).
@@ -78,7 +82,10 @@ slug: <what this chain of sessions is called>
 <one sentence>
 
 ## State
-<files touched, what's done, what's left>
+<files touched, what's done, what's left. Environment and data claims — DB
+contents, running services, UI behavior — carry their standing: VERIFIED
+(re-checked while drafting this brief; name the check) or ASSUMED (carried
+from earlier turns; say so). Never as bare fact>
 
 ## Decisions taken
 <only the non-obvious ones — agreed conventions, rejected tradeoffs>
@@ -112,6 +119,13 @@ Drafting rules:
   skipped.
 - Zero filler, zero obvious explanations.
 - If the user already provided a prompt, use it as-is — do not rewrite it.
+- **State claims about the environment are cheap to re-check and expensive to get wrong —
+  re-check them while drafting.** A brief is a claims artifact nobody verifies on arrival:
+  in one 3-day window an arriving session had to correct its brief on the record ("dijo que
+  'la BD de E2E no se tocó' — eso es falso"), a second brief assumed a UI button that did not
+  exist, and a third scared the user about production over a fixture load. `git status`, a
+  worktree list, a migration check cost seconds at draft time; mark anything not re-checked
+  as ASSUMED so the next session verifies before repeating it to the user as fact.
 
 **Never manufacture a next step to fill that section.** Answer one question — *is the next step
 mine or the user's?* — and write the answer down. A recorded fork is a valid answer; an implicit
