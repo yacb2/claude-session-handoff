@@ -384,6 +384,15 @@ cat > "$TAILDIR/renamed.jsonl" <<'RENEOF'
 {"type":"assistant","gitBranch":"feature/lineage","message":{"content":[{"type":"text","text":"THE_REPLY"}]}}
 RENEOF
 
+# Our own title, untouched, beside an auto-titler that has drifted to a new
+# topic. Adopting `ai-title` here would rename the chain once per link — the
+# inverse of the frozen slug and just as unreadable (research C8 addendum).
+cat > "$TAILDIR/autotitle-drift.jsonl" <<'DRIFTEOF'
+{"type":"custom-title","gitBranch":"feature/lineage","customTitle":"↻2 · Refactor auth"}
+{"type":"ai-title","gitBranch":"feature/lineage","aiTitle":"Deploying to prod"}
+{"type":"assistant","gitBranch":"feature/lineage","message":{"content":[{"type":"text","text":"THE_REPLY"}]}}
+DRIFTEOF
+
 # The same transcript at link 3 of a live chain: `custom-title` already carries
 # the ordinal this tool put there.
 cat > "$TAILDIR/ordinal-title.jsonl" <<'ORDEOF'
@@ -397,22 +406,60 @@ lineage_prompt() {
     '{prompt:., session_id:$s, cwd:$c, transcript_path:$t}'
 }
 
-# Case T — the slug comes from the RECORD, not from the transcript's title.
-# A hand-renamed session is the case that separates the two: the record still
-# says `Refactor auth`, the transcript now says `RENAMED_BY_HAND`, and an
-# implementation that reads the title inherits the rename into the chain's name
-# and loses the chain. Mode is asserted alongside for the Case S reason — the
-# slug is conversation-derived content and has no business being 0644.
+# Case T — a deliberate rename outranks the recorded slug.
+#
+# This assertion is the reverse of the one it replaces, and the reversal is the
+# point. T used to require the record to win over `RENAMED_BY_HAND`, on the
+# stated grounds that adopting a rename "loses the chain". It does not: the
+# chain is identified by the `chain` field and the `prev` links, none of which
+# a slug touches, and re-slugging is D4's ordinary behaviour on the
+# `handoff: <text>` path. What the old rule actually cost was the manual
+# override the research designated for C8 — measured 2026-08-19 on a live
+# chain whose root session had no title to inherit: it bootstrapped as
+# `main 13:09`, and nothing a user could type in the picker would ever
+# improve it.
+#
+# The record is what makes the rename detectable, which is what it was for
+# (`agent-name` cannot tell a user rename from a tool one). We wrote
+# `↻N · <recorded slug>`; a `custom-title` that says anything else now is a
+# human naming the chain. Guarded on both sides by AH (our own title must not
+# read as a rename) and AI (the auto-titler must not re-slug).
 SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
 run_hook "$(lineage_prompt 'handoff' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
 SEED_CHAIN=""
 if [ "$TITLE_EXISTS" = 1 ] \
-  && contains "$TITLE_OUT" "slug=Refactor auth" \
-  && contains "$TITLE_OUT" "prev=SESS-A" \
-  && ! contains "$TITLE_OUT" "RENAMED_BY_HAND"; then
-  ok "T: the title file inherits the slug from the record, not from a renamed title"
+  && contains "$TITLE_OUT" "slug=RENAMED_BY_HAND" \
+  && contains "$TITLE_OUT" "prev=SESS-A"; then
+  ok "T: a Ctrl+R rename re-slugs the chain, outranking the record"
 else
-  no "T: slug/prev wrong (exists=$TITLE_EXISTS out=[$TITLE_OUT])"
+  no "T: the rename did not reach the chain (exists=$TITLE_EXISTS out=[$TITLE_OUT])"
+fi
+
+# Case AH — the control T needs: our OWN title must never read as a rename.
+# Every link writes `custom-title` itself, so a comparison that ignored the
+# `↻N · ` prefix would see a difference at every handoff and re-slug the chain
+# with its own rendering — `↻3 · ↻2 · Refactor auth` by link 4.
+SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
+run_hook "$(lineage_prompt 'handoff' 'SESS-A' "$TAILDIR/ordinal-title.jsonl")" "$TEST_PID" "$PATH"
+SEED_CHAIN=""
+AH_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+if [ "$AH_SLUG" = "Refactor auth" ]; then
+  ok "AH: the tool's own ↻N title is not mistaken for a rename"
+else
+  no "AH: slug is [$AH_SLUG], expected 'Refactor auth' (self-inflicted re-slug)"
+fi
+
+# Case AI — the auto-titler must not re-slug. A name that derives once per link
+# is the inverse of the frozen slug and equally unreadable, so only the
+# deliberate `custom-title` override is consulted; `ai-title` is not.
+SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
+run_hook "$(lineage_prompt 'handoff' 'SESS-A' "$TAILDIR/autotitle-drift.jsonl")" "$TEST_PID" "$PATH"
+SEED_CHAIN=""
+AI_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+if [ "$AI_SLUG" = "Refactor auth" ]; then
+  ok "AI: a drifting ai-title does not rename the chain"
+else
+  no "AI: slug is [$AI_SLUG], expected 'Refactor auth' (auto-titler hijacked the chain)"
 fi
 case "$TITLE_MODE" in
   -rw-------) ok "T: the title file is 0600, like the payload beside it" ;;

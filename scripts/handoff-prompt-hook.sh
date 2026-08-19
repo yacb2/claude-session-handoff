@@ -319,9 +319,10 @@ sanitize_slug() {
 
 # The chain's current name, in precedence order:
 #   1. the brief's own `slug:` line — a brief re-describes the chain (D4)
-#   2. the record's slug for this session — the name the chain already has
-#   3. this session's title, stripped of any ordinal we put there
-#   4. <gitBranch> <HH:MM>
+#   2. a deliberate rename of this session — the picker is the manual override
+#   3. the record's slug for this session — the name the chain already has
+#   4. this session's title, stripped of any ordinal we put there
+#   5. <gitBranch> <HH:MM>
 #
 # 3 must strip: a hook-set title lands in `custom-title`, so by link 3 the
 # transcript itself reads `↻3 · Refactor auth`. Used verbatim, the next link is
@@ -335,7 +336,29 @@ chain_slug() {
   if [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ -n "$SESSION_ID" ]; then
     _s=$(jq -r --arg s "$SESSION_ID" 'select(.session == $s) | .slug // empty' \
       "$CHAIN_FILE" 2>/dev/null | tail -1)
-    [ -n "$_s" ] && { printf '%s' "$_s"; return 0; }
+    if [ -n "$_s" ]; then
+      # 2 before 3: what we wrote is `↻N · $_s`, so a `custom-title` reading
+      # anything else is a human in the picker saying what the chain is called.
+      # The record is what makes that detectable — `agent-name` cannot tell a
+      # user rename from a tool one — and it is the manual override the
+      # research designated for C8. A chain whose root had no title to inherit
+      # bootstraps on the `<branch> <HH:MM>` fallback, and without this the
+      # bare path can never improve on it.
+      #
+      # `ai-title` is deliberately NOT consulted here. A name that re-derives
+      # once per link is the inverse of the frozen slug and just as unreadable;
+      # the override has to be something the user did on purpose.
+      if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+        _t=$(jq -r 'select(.type == "custom-title") | .customTitle // empty' \
+          "$TRANSCRIPT" 2>/dev/null | tail -1 | sed 's/^\(↻[0-9]* · \)*//')
+        if [ -n "$_t" ] && [ "$_t" != "$_s" ]; then
+          printf '%s' "$_t"
+          return 0
+        fi
+      fi
+      printf '%s' "$_s"
+      return 0
+    fi
   fi
 
   if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
