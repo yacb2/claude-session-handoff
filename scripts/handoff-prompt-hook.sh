@@ -364,6 +364,15 @@ fallback_slug() {
   printf '%s %s' "$_b" "$(date +%H:%M)"
 }
 
+# Not covered by the wrapper's cleanup, and it cannot be: claude-wrapper.sh is
+# byte-for-byte identical to claude-restart's copy, which has no lineage, so it
+# clears handoff-{flag,payload,exit} and knows nothing about this file. If the
+# wrapper exits instead of relaunching, the title survives it; a later wrapper
+# recycling the PID then titles and records a session that was never handed off.
+# Same family and same severity as the recycled-PID note in the sibling hook —
+# cosmetic, one spurious link, and the record shows it. Hardening it means
+# touching the shared wrapper, which the ADR deliberately ruled out.
+#
 # Unlinked on every path, for the Case I reason one file over: CLAUDE_HANDOFF_ID
 # is the wrapper PID and is stable for the whole dispatch loop, so a title left
 # behind by an earlier handoff would be read by the NEXT session and put it on a
