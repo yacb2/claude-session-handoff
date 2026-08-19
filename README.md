@@ -34,8 +34,9 @@ Writes payload + flag, sends SIGTERM to the wrapper
 Wrapper sees the flag and launches a fresh `claude` (no --resume)
         │
         ▼
-SessionStart hook reads the payload, injects it as additionalContext +
-shows a systemMessage banner, deletes the payload (one-shot)
+SessionStart hook reads the payload, injects it as additionalContext,
+shows a systemMessage banner, titles the session `↻N · <slug>` and
+records the link; deletes the payload (one-shot)
         │
         ▼
 New session opens with the handoff context loaded.
@@ -91,7 +92,51 @@ The skill works across any language Claude understands; the description is in En
 > handoff
 ```
 
-Fresh session, **no seeded context**. The wrapper prints an explicit warning before closing. Equivalent to `/clear` but with a full process restart.
+Zero tokens, and **not** an empty session: the hook copies the previous session's last reply out
+of the transcript and seeds that, labelled as a raw tail rather than a curated brief. It exists
+for the session too expensive to prompt — a 600k-token conversation with a cold cache, where
+asking the model to draft a brief costs one request over the whole thing.
+
+### 5. `handoff --clean` (deliberately empty)
+
+```
+> handoff --clean
+```
+
+Fresh session, **no seeded context**, and a new chain: the ordinal does not carry across a clean
+break. The wrapper prints an explicit warning before closing. Equivalent to `/clear` but with a
+full process restart.
+
+## Session titles and chain lineage
+
+Claude Code has no notion of one session succeeding another, so an untitled handoff session gets
+auto-titled after its first prompt — and the wrapper's first prompt is the word *continue*. Five
+handoffs used to render as five identical rows in `claude --resume`.
+
+Each link is now titled with its position in front of the chain's name, because the picker
+truncates the tail:
+
+```
+↻4 · Refactor auth      2m ago    feature/auth   412 KB
+↻3 · Refactor auth      1h ago    feature/auth   380 KB
+↻2 · Refactor auth      3h ago    feature/auth   210 KB
+```
+
+The ordinal is not parsed back out of the title — `Ctrl+R` lets you rename a session, which would
+silently overwrite it. It is read from an append-only record at
+`~/.claude/handoff-chains/<project>.jsonl`, one line per link:
+
+```json
+{"chain":"c1","n":3,"slug":"Refactor auth","session":"…","prev":"…","wrapper":"4711","at":"…Z"}
+```
+
+The record is what survives the wrapper dying, and it is the only thing that can see a fork —
+resume an old link, hand off again, and two sessions are legitimately the N+1th child of the same
+parent. The newcomer is marked `"sibling":true` rather than renumbered.
+
+The chain is named by the `slug:` line the brief opens with, so `handoff: <text>` re-describes it
+and bare `handoff` inherits it. `--uninstall` leaves the records alone: they are history, not
+install state.
 
 ## Requirements
 
@@ -154,7 +199,7 @@ variants each need a different sequence per emulator.
 | File | Purpose |
 |---|---|
 | `scripts/claude-wrapper.sh` | Unified POSIX wrapper that runs `claude` in a loop. On exit, checks per-PID flag files and either relaunches fresh (handoff) or with `--resume` (restart). Byte-for-byte identical to the copy in `claude-restart`. |
-| `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>`, emits both `additionalContext` (for Claude) and `systemMessage` (banner for you), plus an optional bell under `HANDOFF_BELL=1`; deletes the payload. |
+| `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>` and `handoff-title-<pid>`, emits `additionalContext` (for Claude), `systemMessage` (banner for you) and `sessionTitle` (the picker row), appends the chain link, plus an optional bell under `HANDOFF_BELL=1`; deletes both files. |
 | `scripts/handoff-prompt-hook.sh` | UserPromptSubmit hook: intercepts `handoff` / `handoff: <text>` and triggers a handoff without going through the model. |
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
@@ -171,6 +216,7 @@ variants each need a different sequence per emulator.
 - **Requires the wrapper**: the zero-token hook path only works when `claude` is launched via the `claude()` shell function the installer adds. If you start Claude from an IDE integration that calls the binary directly, use `/handoff` (the slash command) or the skill.
 - **Strict match on the hook**: the UserPromptSubmit hook fires only on `handoff` or `handoff: ...` at the start of the prompt (case-insensitive).
 - **Bare `handoff` needs `jq` and a completed reply**: the transcript tail is parsed with `jq`, and the extraction takes the last assistant line carrying no tool call. Without `jq`, without a `transcript_path`, or on a session that never produced a reply, the handoff still fires and falls back to a clean session.
+- **Lineage is per-project**: `claude --resume` is scoped to one project by default (`Ctrl+A` widens it). Ordinals make a chain legible *within* a project; across projects the slug does the work. And a chain started by the slash command or the skill takes its predecessor from the last link recorded under the same wrapper PID, so a recycled PID in the same project can inherit a stranger's ordinal — cosmetic, and the record shows it.
 - **Payload is one-shot**: each handoff seeds exactly one session and is deleted afterwards. There is no persistent state.
 - **Skill trigger eval is conservative**: the `tests/eval-trigger.sh` harness uses `claude -p` with a slash-command shim, which under-measures side-effect-heavy skills like this one. Real interactive triggering is more reliable than the harness score.
 

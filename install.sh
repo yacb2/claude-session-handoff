@@ -545,8 +545,12 @@ uninstall() {
   rm -rf "$SKILLS_DIR/session-handoff"
   info "Skill removed"
 
-  rm -f "$TMP_DIR"/handoff-flag-* "$TMP_DIR"/handoff-payload-*
+  rm -f "$TMP_DIR"/handoff-flag-* "$TMP_DIR"/handoff-payload-* "$TMP_DIR"/handoff-title-*
   info "Temp files cleaned"
+
+  # ~/.claude/handoff-chains/ is deliberately NOT removed. It is not install
+  # state: it is the record of which sessions came from which, and the sessions
+  # it names outlive this tool being installed.
 
   if [ -n "$RC_FILE" ]; then
     if [ "$SHELL_NAME" = "fish" ]; then
