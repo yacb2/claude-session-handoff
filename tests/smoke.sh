@@ -171,8 +171,12 @@ mkdir -p "$BELL_TMP"
 # The hook consumes (deletes) the payload, so it is re-seeded per branch.
 seed_and_run() {
   printf 'smoke payload' > "$BELL_TMP/handoff-payload-$BELL_ID"
-  env HOME="$BELL_HOME" HANDOFF_BELL="$1" CLAUDE_HANDOFF_ID="$BELL_ID" \
-    sh "$SS_HOOK" 2>/dev/null
+  # stdin is piped because the hook reads it (session_id / cwd for the chain
+  # record). Claude Code always pipes this JSON; invoked without it from a
+  # terminal, the hook used to block in `cat` and hang this suite.
+  printf '{"session_id":"smoke","cwd":"/w/smoke","hook_event_name":"SessionStart","source":"startup"}' \
+    | env HOME="$BELL_HOME" HANDOFF_BELL="$1" CLAUDE_HANDOFF_ID="$BELL_ID" \
+      sh "$SS_HOOK" 2>/dev/null
 }
 
 BELL_OFF=$(seed_and_run 0)

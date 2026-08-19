@@ -48,11 +48,26 @@ no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 # consumes, so several cases below assert on it rather than on the sentinel.
 # SEED_PAYLOAD, if non-empty, is written to the payload path BEFORE the hook
 # runs, so a case can test what happens to an already-present payload.
+# SEED_TITLE, likewise, is written to the title path before the hook runs.
+# SEED_CHAIN, if non-empty, is written as the chain record for CHAIN_KEY — the
+# hook resolves the slug out of it, so a case that wants an inherited slug has
+# to stage one.
+# Also sets: TITLE_OUT / TITLE_EXISTS / TITLE_MODE for the title file, which is
+# the outgoing half of the lineage (the record itself is written by the
+# SessionStart hook and is asserted in the ss_* cases below).
 run_hook() {
   SANDBOX=$(mktemp -d)
   if [ -n "${SEED_PAYLOAD:-}" ]; then
     mkdir -p "$SANDBOX/.claude/tmp"
     printf '%s' "$SEED_PAYLOAD" > "$SANDBOX/.claude/tmp/handoff-payload-$2"
+  fi
+  if [ -n "${SEED_TITLE:-}" ]; then
+    mkdir -p "$SANDBOX/.claude/tmp"
+    printf '%s' "$SEED_TITLE" > "$SANDBOX/.claude/tmp/handoff-title-$2"
+  fi
+  if [ -n "${SEED_CHAIN:-}" ]; then
+    mkdir -p "$SANDBOX/.claude/handoff-chains"
+    printf '%s\n' "$SEED_CHAIN" > "$SANDBOX/.claude/handoff-chains/${CHAIN_KEY}.jsonl"
   fi
   OUT=$(printf '%s' "$1" | HOME="$SANDBOX" PATH="$3" CLAUDE_HANDOFF_ID="$2" \
     sh "$HOOK" 2>"$SANDBOX/stderr")
@@ -69,6 +84,16 @@ run_hook() {
   else
     PAYLOAD_EXISTS=0
     PAYLOAD_OUT=""
+  fi
+  TFILE="$SANDBOX/.claude/tmp/handoff-title-$2"
+  if [ -f "$TFILE" ]; then
+    TITLE_EXISTS=1
+    TITLE_OUT=$(cat "$TFILE")
+    TITLE_MODE=$(ls -l "$TFILE" | cut -c1-10)
+  else
+    TITLE_EXISTS=0
+    TITLE_OUT=""
+    TITLE_MODE=""
   fi
   rm -rf "$SANDBOX"
 }
@@ -316,11 +341,346 @@ SS_HOOK="$REPO/scripts/handoff-session-start.sh"
 SSBOX=$(mktemp -d)
 mkdir -p "$SSBOX/.claude/tmp"
 printf 'a brief worth keeping' > "$SSBOX/.claude/tmp/handoff-payload-77777"
-HOME="$SSBOX" PATH="$NOJQ" CLAUDE_HANDOFF_ID=77777 sh "$SS_HOOK" >/dev/null 2>&1
+# stdin is piped because the hook reads it: `--clean` carries no payload but is
+# still a chain event, so session_id has to be available before the early exits.
+printf '{"session_id":"SESS-J","cwd":"/w/proj-under-test","hook_event_name":"SessionStart","source":"startup"}' \
+  | HOME="$SSBOX" PATH="$NOJQ" CLAUDE_HANDOFF_ID=77777 sh "$SS_HOOK" >/dev/null 2>&1
 if [ -f "$SSBOX/.claude/tmp/handoff-payload-77777" ]; then
   ok "J: SessionStart keeps the payload when it cannot emit it"
 else
   no "J: SessionStart destroyed the payload after failing to emit it"
+fi
+rm -rf "$SSBOX"
+
+# ------------------------------------------------------------------------------
+# Chain lineage — Cases T..AD.
+#
+# The defect: every handoff session is auto-titled after its first prompt, which
+# is the word `continue`, so a chain of five sessions renders as five identical
+# rows in the picker and nothing says which came from which.
+#
+# The mechanism has two halves and they are deliberately split (ADR
+# 2026-08-19-handoff-chain-lineage, D1/D2):
+#
+#   outgoing side (handoff-prompt-hook.sh)  -> writes handoff-title-<pid>:
+#       what the chain is CALLED (slug), and who I am (prev = my session id).
+#   incoming side (handoff-session-start.sh) -> emits sessionTitle and appends
+#       one record line to ~/.claude/handoff-chains/<project>.jsonl:
+#       WHERE in the chain we are (the ordinal).
+#
+# The ordinal is read from the record and never parsed back out of a title —
+# `Ctrl+R` renames a session and would silently overwrite it. Cases T, U and AA
+# are the three routes by which title-parsing sneaks back in.
+CHAIN_CWD=/w/proj-under-test
+CHAIN_KEY=-w-proj-under-test
+
+# A transcript whose title was renamed BY HAND after the hook set it. Both title
+# line types are present because a hook-set title lands in `custom-title` while
+# the auto-titler keeps writing `ai-title` in its own slot — asserting on the
+# merged view answers the wrong question (proofs/session-title-lineage/).
+cat > "$TAILDIR/renamed.jsonl" <<'RENEOF'
+{"type":"ai-title","gitBranch":"feature/lineage","aiTitle":"Continuar con la sesion"}
+{"type":"custom-title","gitBranch":"feature/lineage","customTitle":"RENAMED_BY_HAND"}
+{"type":"assistant","gitBranch":"feature/lineage","message":{"content":[{"type":"text","text":"THE_REPLY"}]}}
+RENEOF
+
+# The same transcript at link 3 of a live chain: `custom-title` already carries
+# the ordinal this tool put there.
+cat > "$TAILDIR/ordinal-title.jsonl" <<'ORDEOF'
+{"type":"custom-title","gitBranch":"feature/lineage","customTitle":"↻3 · Refactor auth"}
+{"type":"assistant","gitBranch":"feature/lineage","message":{"content":[{"type":"text","text":"THE_REPLY"}]}}
+ORDEOF
+
+lineage_prompt() {
+  # <prompt> <session-id> <transcript>
+  printf '%s' "$1" | jq -Rs --arg s "$2" --arg t "$3" --arg c "$CHAIN_CWD" \
+    '{prompt:., session_id:$s, cwd:$c, transcript_path:$t}'
+}
+
+# Case T — the slug comes from the RECORD, not from the transcript's title.
+# A hand-renamed session is the case that separates the two: the record still
+# says `Refactor auth`, the transcript now says `RENAMED_BY_HAND`, and an
+# implementation that reads the title inherits the rename into the chain's name
+# and loses the chain. Mode is asserted alongside for the Case S reason — the
+# slug is conversation-derived content and has no business being 0644.
+SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
+run_hook "$(lineage_prompt 'handoff' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
+SEED_CHAIN=""
+if [ "$TITLE_EXISTS" = 1 ] \
+  && contains "$TITLE_OUT" "slug=Refactor auth" \
+  && contains "$TITLE_OUT" "prev=SESS-A" \
+  && ! contains "$TITLE_OUT" "RENAMED_BY_HAND"; then
+  ok "T: the title file inherits the slug from the record, not from a renamed title"
+else
+  no "T: slug/prev wrong (exists=$TITLE_EXISTS out=[$TITLE_OUT])"
+fi
+case "$TITLE_MODE" in
+  -rw-------) ok "T: the title file is 0600, like the payload beside it" ;;
+  *)          no "T: title file mode is [$TITLE_MODE], expected -rw-------" ;;
+esac
+
+# Case U — when there IS no record (link 1, or a resume of an unrecorded
+# session) the transcript title is the fallback slug, and it must be stripped of
+# any ordinal this tool put there. Left verbatim, link 4 is titled
+# `↻4 · ↻3 · Refactor auth` and every later link compounds again. This is the
+# quiet route back to parsing the ordinal out of a title, and it fires exactly
+# where nobody is looking.
+run_hook "$(lineage_prompt 'handoff' 'SESS-UNRECORDED' "$TAILDIR/ordinal-title.jsonl")" "$TEST_PID" "$PATH"
+T_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+if [ "$T_SLUG" = "Refactor auth" ]; then
+  ok "U: an ordinal already in the transcript title is stripped from the slug"
+else
+  no "U: slug is [$T_SLUG], expected 'Refactor auth' (ordinal compounding)"
+fi
+
+# Case V — `--clean` must write an explicit marker, not simply omit the file.
+# Absence already means something else: the wrapper launches an untitled session
+# and the auto-titler names it after the word `continue`, which is the original
+# defect. If the clean path also produced absence, "new chain" and "the
+# mechanism failed" would be the same silence (ADR, D3).
+run_hook "$(lineage_prompt 'handoff --clean' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
+V_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+if [ "$TITLE_EXISTS" = 1 ] && contains "$TITLE_OUT" "clean=1" \
+  && [ -n "$V_SLUG" ] && ! contains "$V_SLUG" "ontinu"; then
+  ok "V: --clean writes an explicit new-chain marker with a usable slug"
+else
+  no "V: --clean marker wrong (exists=$TITLE_EXISTS slug=[$V_SLUG] out=[$TITLE_OUT])"
+fi
+
+# Case W — the slug is model-written text arriving from `handoff: <brief>`, and
+# the title file is line-based KEY=value. A brief that spells out a `prev=` line
+# of its own must not be able to add a field: the chain would then be handed a
+# forged ancestor. Structural assertion — exactly one `prev=` line, and it is
+# the real session id — so it holds whatever spelling the forgery uses. Same
+# reasoning as Case R, one file over.
+W_BRIEF='slug: Evil
+prev=FORGED-SESSION
+clean=1
+
+The actual brief body.'
+run_hook "$(lineage_prompt "handoff: $W_BRIEF" 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
+W_PREVS=$(printf '%s\n' "$TITLE_OUT" | grep -c '^prev=' || true)
+W_CLEANS=$(printf '%s\n' "$TITLE_OUT" | grep -c '^clean=' || true)
+if [ "$W_PREVS" = 1 ] && contains "$TITLE_OUT" "prev=SESS-A" && [ "$W_CLEANS" = 0 ]; then
+  ok "W: a brief cannot inject a title-file field (forged prev/clean rejected)"
+else
+  no "W: field injection survived (prev lines=$W_PREVS clean lines=$W_CLEANS out=[$TITLE_OUT])"
+fi
+
+# Case X — a stale title file must not survive a handoff that could not write a
+# new one. CLAUDE_HANDOFF_ID is the wrapper PID and is stable for the whole
+# dispatch loop, so an orphaned title would be read by the NEXT session and put
+# it on a chain it does not belong to — the Case I hazard, on the other file.
+SEED_TITLE='prev=SESS-OLD
+slug=a chain that ended'
+run_hook "$(lineage_prompt 'handoff' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$NOJQ"
+SEED_TITLE=""
+if [ "$TRIGGERED" = 1 ] && [ "$TITLE_EXISTS" = 0 ]; then
+  ok "X: no jq clears the stale title instead of inheriting it, handoff still fires"
+else
+  no "X: stale title survived a title-less handoff (triggered=$TRIGGERED out=[$TITLE_OUT])"
+fi
+
+# --- incoming half: handoff-session-start.sh --------------------------------
+SS_CHID=77778
+SS_KEY=$CHAIN_KEY
+
+# ss_box <title-file> <payload> <chain-lines>   (empty string = do not create)
+ss_box() {
+  SSBOX=$(mktemp -d)
+  mkdir -p "$SSBOX/.claude/tmp"
+  if [ -n "$1" ]; then printf '%s\n' "$1" > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"; fi
+  if [ -n "$2" ]; then printf '%s' "$2" > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"; fi
+  if [ -n "$3" ]; then
+    mkdir -p "$SSBOX/.claude/handoff-chains"
+    printf '%s\n' "$3" > "$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
+  fi
+}
+
+# ss_run <session-id> <path-override>
+ss_run() {
+  SS_OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+    "$1" "$CHAIN_CWD" \
+    | HOME="$SSBOX" PATH="$2" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" 2>/dev/null)
+  SS_TITLE=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.sessionTitle // empty' 2>/dev/null)
+  SS_REC_FILE="$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
+  if [ -f "$SS_REC_FILE" ]; then
+    SS_REC=$(tail -1 "$SS_REC_FILE")
+    SS_LINES=$(wc -l < "$SS_REC_FILE" | tr -d ' ')
+  else
+    SS_REC=""
+    SS_LINES=0
+  fi
+  if [ -f "$SSBOX/.claude/tmp/handoff-title-$SS_CHID" ]; then SS_TITLE_LEFT=1; else SS_TITLE_LEFT=0; fi
+  if [ -f "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID" ]; then SS_PAYLOAD_LEFT=1; else SS_PAYLOAD_LEFT=0; fi
+}
+ss_field() { printf '%s' "$SS_REC" | jq -r "$1 // empty" 2>/dev/null; }
+
+# Case Y — a session start with no title file is not part of a chain, and must
+# write nothing at all. Every ordinary `claude` start hits this path, so a
+# record line here would fill the chain file with noise and a sessionTitle here
+# would rename sessions this tool never handed off. The payload half is
+# unaffected — it is still seeded.
+ss_box "" "a brief worth keeping" ""
+ss_run "SESS-PLAIN" "$PATH"
+if [ -z "$SS_TITLE" ] && [ "$SS_LINES" = 0 ] \
+  && [ ! -d "$SSBOX/.claude/handoff-chains" ] \
+  && contains "$SS_OUT" "a brief worth keeping"; then
+  ok "Y: no title file -> no sessionTitle, no record, payload still seeded"
+else
+  no "Y: an unchained start wrote something (title=[$SS_TITLE] lines=$SS_LINES)"
+fi
+rm -rf "$SSBOX"
+
+# Case Z — the clean marker opens a NEW chain: ordinal 1, no ancestor, and the
+# slug rendered bare. `↻1 · x` would be a lie about lineage, and inheriting the
+# previous chain's ordinal across a deliberate break is what D3 rules out.
+ss_box "clean=1
+slug=feature/lineage 14:05" "" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+ss_run "SESS-CLEAN" "$PATH"
+if [ "$SS_TITLE" = "feature/lineage 14:05" ] \
+  && [ "$(ss_field .n)" = "1" ] && [ "$(ss_field .clean)" = "true" ] \
+  && [ -z "$(ss_field .prev)" ] && [ "$(ss_field .chain)" = "SESS-CLEAN" ] \
+  && [ "$SS_LINES" = 2 ]; then
+  ok "Z: --clean opens a new chain at ordinal 1 with no ancestor"
+else
+  no "Z: clean chain wrong (title=[$SS_TITLE] rec=[$SS_REC])"
+fi
+rm -rf "$SSBOX"
+
+# Case AA — the ordinal comes from the record even when the title was renamed.
+# This is C4: `Ctrl+R` overwrites the string the ordinal would have been read
+# out of, and a title-parsing implementation restarts the count from scratch
+# there. The record is the only source no rename can corrupt.
+ss_box "prev=SESS-A
+slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+ss_run "SESS-NEXT" "$PATH"
+if [ "$SS_TITLE" = "↻3 · Refactor auth" ] \
+  && [ "$(ss_field .n)" = "3" ] && [ "$(ss_field .chain)" = "c1" ] \
+  && [ "$(ss_field .prev)" = "SESS-A" ] && [ "$(ss_field .session)" = "SESS-NEXT" ] \
+  && [ "$SS_LINES" = 2 ]; then
+  ok "AA: the ordinal is taken from the record and the title is built from it"
+else
+  no "AA: ordinal/title wrong (title=[$SS_TITLE] rec=[$SS_REC] lines=$SS_LINES)"
+fi
+if [ "$SS_TITLE_LEFT" = 0 ] && [ "$SS_PAYLOAD_LEFT" = 0 ]; then
+  ok "AA: title and payload are both consumed once emitted"
+else
+  no "AA: one-shot broken (title_left=$SS_TITLE_LEFT payload_left=$SS_PAYLOAD_LEFT)"
+fi
+rm -rf "$SSBOX"
+
+# Case AB — a fork: resume an old link and hand off again, and two sessions
+# claim the same predecessor (C5). The record is the only place that can see it,
+# because both links are legitimately the N+1th child of the same parent. Mark
+# it; do not renumber, and do not rewrite the sibling that got there first —
+# the file is append-only.
+ss_box "prev=SESS-A
+slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}
+{"chain":"c1","n":3,"slug":"Refactor auth","session":"SESS-B","prev":"SESS-A","wrapper":"77778","at":"2026-08-19T11:00:00Z"}'
+ss_run "SESS-FORK" "$PATH"
+AB_FIRST=$(sed -n '2p' "$SS_REC_FILE" 2>/dev/null)
+if [ "$(ss_field .sibling)" = "true" ] && [ "$(ss_field .prev)" = "SESS-A" ] \
+  && [ "$SS_LINES" = 3 ] \
+  && contains "$AB_FIRST" '"session":"SESS-B"' \
+  && ! contains "$AB_FIRST" '"sibling"'; then
+  ok "AB: a second link claiming the same prev is recorded as a sibling"
+else
+  no "AB: fork not detected (rec=[$SS_REC] lines=$SS_LINES first=[$AB_FIRST])"
+fi
+rm -rf "$SSBOX"
+
+# Case AB2 — and an EMPTY prev is not a repeated one. Two chains whose first
+# link has no recorded ancestor both carry `prev=""`; flagging the second a
+# sibling of the first would make the fork marker fire on the ordinary case
+# instead of the rare one.
+ss_box "slug=Another chain" "the brief" '{"chain":"c0","n":1,"slug":"Older chain","session":"SESS-OLD","prev":"","wrapper":"90001","at":"2026-08-19T09:00:00Z"}'
+ss_run "SESS-ORPHAN" "$PATH"
+if [ -z "$(ss_field .sibling)" ] && [ "$SS_LINES" = 2 ]; then
+  ok "AB2: an empty prev is never a repeated prev"
+else
+  no "AB2: empty prev flagged as a fork (rec=[$SS_REC])"
+fi
+rm -rf "$SSBOX"
+
+# Case AC — Case J's guarantee, extended to the title file. The record is JSON,
+# so no jq means no record and no title; the run must degrade to today's
+# behaviour and keep BOTH files rather than consuming what it could not emit.
+ss_box "prev=SESS-A
+slug=Refactor auth" "a brief worth keeping" ""
+ss_run "SESS-NOJQ" "$NOJQ"
+if [ "$SS_TITLE_LEFT" = 1 ] && [ "$SS_PAYLOAD_LEFT" = 1 ] && [ "$SS_LINES" = 0 ]; then
+  ok "AC: SessionStart keeps title and payload when it cannot emit them"
+else
+  no "AC: no-jq path consumed state it never emitted (title_left=$SS_TITLE_LEFT payload_left=$SS_PAYLOAD_LEFT)"
+fi
+rm -rf "$SSBOX"
+
+# Case AD — the chain file is not one-shot temp state: it lives outside
+# ~/.claude/tmp, it never expires, and it carries slugs derived from
+# conversation content. Case S's argument applies with more force here, and it
+# has to hold for the directory the hook creates as well as the file.
+ss_box "prev=SESS-A
+slug=Refactor auth" "the brief" ""
+ss_run "SESS-MODE" "$PATH"
+AD_DIR=$(ls -ld "$SSBOX/.claude/handoff-chains" 2>/dev/null | cut -c1-10)
+AD_FILE=$(ls -l "$SS_REC_FILE" 2>/dev/null | cut -c1-10)
+if [ "$AD_DIR" = "drwx------" ] && [ "$AD_FILE" = "-rw-------" ]; then
+  ok "AD: the chain record is 0600 inside a 0700 directory"
+else
+  no "AD: chain record modes are dir=[$AD_DIR] file=[$AD_FILE]"
+fi
+rm -rf "$SSBOX"
+
+# Case AE — the skill path. `aidex-plan-exec`, `aidex-loop` and `aidex-audit`
+# mandate a handoff but none of them types the trigger: the step runs through
+# SKILL.md Step 2, which writes the payload with its own Bash block and never
+# touches the UserPromptSubmit hook. So there is no title file and no `prev` —
+# a session cannot know its own id — and this is the mode where chains grow
+# longest unwatched, which is the pain the ADR's addendum is about.
+#
+# The brief's own `slug:` line carries the name, and the predecessor is the last
+# link this wrapper recorded: under one wrapper, sessions run strictly one after
+# another. The forged second `slug:` line asserts the capture is line-wise —
+# the value is joined into a title and a JSON record, so a multi-line slug is
+# the Case W hazard one file over.
+ss_box "" "slug: Plan exec — phase 3
+slug: FORGED
+## Current goal
+finish the migration" '{"chain":"c9","n":2,"slug":"Plan exec — phase 2","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+ss_run "SESS-SKILL" "$PATH"
+if [ "$SS_TITLE" = "↻3 · Plan exec — phase 3" ] \
+  && [ "$(ss_field .prev)" = "SESS-A" ] && [ "$(ss_field .chain)" = "c9" ] \
+  && [ "$(ss_field .n)" = "3" ]; then
+  ok "AE: a skill-written brief joins the chain via its slug line and the wrapper"
+else
+  no "AE: skill path not chained (title=[$SS_TITLE] rec=[$SS_REC])"
+fi
+if [ "$(ss_field .slug)" = "Plan exec — phase 3" ]; then
+  ok "AE: the slug is one sanitised line, not whatever the brief spans"
+else
+  no "AE: slug capture wrong ([$(ss_field .slug)])"
+fi
+rm -rf "$SSBOX"
+
+# Case AF — no stdin at all. The lineage half needs session_id, which only
+# arrives on stdin, so a start without it must degrade to no title and no
+# record — and still seed the payload, which needs nothing from stdin. The
+# asymmetry is the point: the payload is the previous session's only copy of
+# its context, while a missing title costs one picker row.
+#
+# It is also the shape that hung tests/smoke.sh: a hook that reads stdin
+# unguarded blocks forever when invoked with a terminal on fd 0, and this one
+# runs at session start, so the failure is "the session never opens".
+ss_box "prev=SESS-A
+slug=Refactor auth" "a brief worth keeping" ""
+SS_OUT=$(HOME="$SSBOX" PATH="$PATH" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" </dev/null 2>/dev/null)
+AF_TITLE=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.sessionTitle // empty' 2>/dev/null)
+if contains "$SS_OUT" "a brief worth keeping" && [ -z "$AF_TITLE" ] \
+  && [ ! -d "$SSBOX/.claude/handoff-chains" ]; then
+  ok "AF: no stdin degrades to no lineage, and the payload is still seeded"
+else
+  no "AF: stdin-less start misbehaved (title=[$AF_TITLE] out=[$SS_OUT])"
 fi
 rm -rf "$SSBOX"
 

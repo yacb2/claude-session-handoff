@@ -141,6 +141,7 @@ mkdir -p "$HANDOFF_DIR"
 umask 077
 
 PAYLOAD_FILE="${HANDOFF_DIR}/handoff-payload-${CLAUDE_HANDOFF_ID}"
+TITLE_FILE="${HANDOFF_DIR}/handoff-title-${CLAUDE_HANDOFF_ID}"
 FLAG_FILE="${HANDOFF_DIR}/handoff-flag-${CLAUDE_HANDOFF_ID}"
 EXIT_TRIGGER="${HANDOFF_DIR}/handoff-exit-${CLAUDE_HANDOFF_ID}"
 
@@ -281,6 +282,106 @@ else
   # not a broken one.
   rm -f "$PAYLOAD_FILE"
 fi
+
+# --- chain lineage (ADR 2026-08-19-handoff-chain-lineage) --------------------
+#
+# The outgoing half. This session writes what only it knows — what the chain is
+# CALLED and who it is — and handoff-session-start.sh works out where in the
+# chain the new session lands. The split is deliberate: the ordinal is read from
+# ~/.claude/handoff-chains/<project>.jsonl and never parsed back out of a title,
+# because Ctrl+R lets the user overwrite that string (C4 in the research), and
+# only the hook that appends the record can guarantee ordinal and title agree.
+#
+# session_id and cwd are pulled HERE rather than beside the prompt parse at the
+# top: that parse runs on every prompt submit in every session and ~100% of them
+# are not handoffs, so it pays for what it needs and nothing else.
+SESSION_ID=""
+CWD=""
+CHAIN_FILE=""
+if command -v jq >/dev/null 2>&1; then
+  SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty')
+  CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty')
+  # Chain key = the cwd with slashes turned into dashes, the shape Claude Code
+  # already uses for ~/.claude/projects/. A basename would put two projects
+  # called `api` on the same chain.
+  [ -n "$CWD" ] && CHAIN_FILE="${HOME}/.claude/handoff-chains/$(printf '%s' "$CWD" | tr '/' '-').jsonl"
+fi
+
+# One line, no control characters, bounded. The slug reaches us as model-written
+# text on the `handoff: <brief>` path and lands in a line-based KEY=value file,
+# so a brief spelling out a `prev=` line of its own must not be able to add a
+# field — the chain would be handed a forged ancestor. Structural, like the
+# payload's line quoting: the value is a single sanitised line by construction,
+# not a list of forbidden spellings. Covered by hook-guard.sh Case W.
+sanitize_slug() {
+  printf '%s' "$1" | tr -d '\000-\037' | cut -c1-80
+}
+
+# The chain's current name, in precedence order:
+#   1. the brief's own `slug:` line — a brief re-describes the chain (D4)
+#   2. the record's slug for this session — the name the chain already has
+#   3. this session's title, stripped of any ordinal we put there
+#   4. <gitBranch> <HH:MM>
+#
+# 3 must strip: a hook-set title lands in `custom-title`, so by link 3 the
+# transcript itself reads `↻3 · Refactor auth`. Used verbatim, the next link is
+# `↻4 · ↻3 · Refactor auth` and every link after it compounds again. The record
+# normally wins first, so this fires only at link 1 or on an unrecorded resume —
+# precisely where nobody would notice. Covered by Case U.
+chain_slug() {
+  _s=$(printf '%s\n' "$PAYLOAD" | head -5 | sed -n 's/^[[:space:]]*[Ss]lug:[[:space:]]*//p' | head -1)
+  [ -n "$_s" ] && { printf '%s' "$_s"; return 0; }
+
+  if [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ -n "$SESSION_ID" ]; then
+    _s=$(jq -r --arg s "$SESSION_ID" 'select(.session == $s) | .slug // empty' \
+      "$CHAIN_FILE" 2>/dev/null | tail -1)
+    [ -n "$_s" ] && { printf '%s' "$_s"; return 0; }
+  fi
+
+  if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    _s=$(jq -r 'select(.type == "custom-title") | .customTitle // empty' "$TRANSCRIPT" 2>/dev/null | tail -1)
+    [ -n "$_s" ] || _s=$(jq -r 'select(.type == "ai-title") | .aiTitle // empty' "$TRANSCRIPT" 2>/dev/null | tail -1)
+    if [ -n "$_s" ]; then
+      printf '%s' "$_s" | sed 's/^\(↻[0-9]* · \)*//'
+      return 0
+    fi
+  fi
+
+  fallback_slug
+}
+
+# Never the word `continue`, which is the defect: an untitled handoff session is
+# auto-titled after its first prompt, and the wrapper's first prompt is that
+# word. Both halves are already at hand — gitBranch is on every transcript line
+# and this hook runs at a known time.
+fallback_slug() {
+  _b=""
+  if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+    _b=$(jq -r 'select(.gitBranch != null and .gitBranch != "") | .gitBranch' "$TRANSCRIPT" 2>/dev/null | tail -1)
+  fi
+  [ -n "$_b" ] || _b=${CWD##*/}
+  [ -n "$_b" ] || _b="session"
+  printf '%s %s' "$_b" "$(date +%H:%M)"
+}
+
+# Unlinked on every path, for the Case I reason one file over: CLAUDE_HANDOFF_ID
+# is the wrapper PID and is stable for the whole dispatch loop, so a title left
+# behind by an earlier handoff would be read by the NEXT session and put it on a
+# chain it never belonged to. Without jq there is no session id, no record and
+# no transcript to read, so the honest outcome is no title at all — the same
+# degrade-to-clean the tail takes in Case Q. Covered by Case X.
+rm -f "$TITLE_FILE"
+if [ -n "$CHAIN_FILE" ] || [ -n "$SESSION_ID" ]; then
+  if [ "$PAYLOAD" = "--clean" ]; then
+    # Absence already means something else — it is what the wrapper produces
+    # when the mechanism fails, and that is indistinguishable from the original
+    # bug. A deliberate new chain says so (D3).
+    printf 'clean=1\nslug=%s\n' "$(sanitize_slug "$(fallback_slug)")" > "$TITLE_FILE"
+  else
+    printf 'prev=%s\nslug=%s\n' "$SESSION_ID" "$(sanitize_slug "$(chain_slug)")" > "$TITLE_FILE"
+  fi
+fi
+
 touch "$FLAG_FILE"
 # Signal the wrapper's watcher to terminate claude. The watcher (started by
 # claude-wrapper.sh v4+) polls this sentinel and sends SIGTERM itself, so the

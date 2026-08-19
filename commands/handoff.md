@@ -17,6 +17,8 @@ Revisa `$ARGUMENTS`:
 **Si `$ARGUMENTS` está vacío**, redacta tú el prompt de handoff. Usa esta estructura mínima — solo información que la próxima sesión NO puede derivar leyendo el código o `CLAUDE.md`:
 
 ```
+slug: <cómo se llama esta cadena de sesiones>
+
 ## Objetivo actual
 <una frase>
 
@@ -34,6 +36,15 @@ está ya verificado>
 ## Restricciones / gotchas
 <lo que la próxima sesión pisaría si no lo supiera>
 ```
+
+La línea `slug:` nombra la cadena y es la única que lee el mecanismo: el hook `SessionStart` la
+toma de las primeras cinco líneas del brief, le antepone el ordinal que lee de
+`~/.claude/handoff-chains/`, y eso queda como título de la sesión en el picker de `--resume`
+(`↻3 · Refactor auth`). Sin ella la sesión nueva se autotitula con su primer prompt — la palabra
+*continue* — y una cadena de cinco sesiones se ve como cinco filas idénticas.
+
+Mantén el slug actual de la cadena salvo que cambie el **tema** del trabajo: una fase nueva del
+mismo trabajo no es un tema nuevo. Una línea, sin ordinal propio — el ordinal sale del registro.
 
 Sé breve. Cada frase tiene que ganarse su lugar. La única sección que nunca se omite es
 `Próximo paso concreto`: contesta *¿el próximo paso es mío o del usuario?* y escribe la
