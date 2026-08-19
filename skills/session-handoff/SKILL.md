@@ -162,13 +162,38 @@ never about whether to hand off, and never twice.
 
 ### Step 2 — execute
 
-With the payload ready, run via Bash. The `$CLAUDE_HANDOFF_ID` check is part of the block, not a
-note above it: unset, every path below still runs and writes `handoff-payload-`, `handoff-flag-`
-and `handoff-exit-` with an empty suffix — files no wrapper is watching — and then reports success.
+With the payload ready, run via Bash. Both checks are part of the block, not notes above it.
+
+The first is the one you can guess: unset, every path below still runs and writes
+`handoff-payload-`, `handoff-flag-` and `handoff-exit-` with an empty suffix — files no wrapper is
+watching — and then reports success. The second is the one you cannot: the wrapper exports
+`$CLAUDE_HANDOFF_ID` as its own PID, and **every descendant inherits it**, including sessions the
+wrapper never launched and does not supervise — a `--fork-session`, a `--resume`, a harness
+background job. There the variable is set and its wrapper is long dead, so a set/unset test passes
+in exactly the case it exists to catch. What separates the two is ancestry, which is why the block
+walks the parent chain.
 
 ```sh
 if [ -z "$CLAUDE_HANDOFF_ID" ]; then
   echo "handoff: wrapper not detected. Launch claude via the shell function that claude-session-handoff installs." >&2
+  exit 1
+fi
+
+# Same walk as handoff-prompt-hook.sh's is_wrapper_ancestor(): a set variable
+# proves a wrapper ran somewhere up the tree, not that mine is still watching.
+is_wrapper_ancestor() {
+  _pid=$$
+  while _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' '); [ -n "$_pid" ]; do
+    case "$_pid" in
+      0|1) return 1 ;;
+    esac
+    [ "$_pid" = "$CLAUDE_HANDOFF_ID" ] && return 0
+  done
+  return 1
+}
+
+if ! is_wrapper_ancestor; then
+  echo "handoff: wrapper PID $CLAUDE_HANDOFF_ID is not an ancestor of this session (stale or inherited env var). Nothing was written and this session will not close." >&2
   exit 1
 fi
 
@@ -190,7 +215,12 @@ touch "$FLAG_FILE"
 touch "$EXIT_TRIGGER"
 ```
 
-After touching `$EXIT_TRIGGER`, do not emit any more output — the wrapper's watcher will close this process within ~0.5s and launch the new session.
+Read the block's exit status before deciding what to say. Non-zero means it refused and printed
+why: nothing was written, this session is not closing, and staying silent leaves the user watching
+a handoff that never happened — the BL-024 failure. Report the reason in that same turn and stop.
+
+Only on exit 0, having touched `$EXIT_TRIGGER`, do not emit any more output — the wrapper's watcher
+will close this process within ~0.5s and launch the new session, so anything else is lost anyway.
 
 Why `touch` instead of signalling the wrapper directly: the new sandbox/automode classifier escalates any process-signal primitive regardless of allowlist rules. The wrapper now owns the termination — it spawns a background watcher that polls `$EXIT_TRIGGER` and signals claude. The skill only needs the benign `touch` capability.
 
