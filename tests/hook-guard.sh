@@ -852,9 +852,12 @@ CMD_BLOCK=$(awk '
   inblock   { print }
 ' "$CMD_MD")
 
+# `(` and a backtick open a command word too: `ps` lives inside a $( ... )
+# substitution, and a class of only [;&| ] silently skips it — the check then
+# reports on the words that happen to be pipeline-adjacent and no others.
 M_MISSING=""
-for W in test printf mkdir cat touch umask; do
-  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|[:space:]])$W([[:space:]]|$)" || continue
+for W in test printf mkdir cat touch umask ps tr; do
+  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|(\`[:space:]])$W([[:space:]]|$)" || continue
   case "$ALLOWED" in
     *"Bash($W:"*) ;;
     *) M_MISSING="$M_MISSING $W" ;;
@@ -872,6 +875,58 @@ if [ -z "$M_MISSING" ]; then
 else
   no "M: /handoff would prompt for permission on:$M_MISSING"
 fi
+
+# Cases N/O — BL-024: the runnable blocks must check for a WATCHING wrapper,
+# not for a set variable.
+#
+# The wrapper exports CLAUDE_HANDOFF_ID as its own PID, and environment
+# variables are inherited by every descendant — including Claude sessions the
+# wrapper never launched and does not supervise (a --fork-session, a --resume,
+# a background job started by the harness). Observed live on 2026-08-12, twice
+# in the same session and silent both times: `test -z` passed on an id
+# inherited from a wrapper that had already exited, the block wrote payload,
+# flag and exit under that id where no watcher was polling, exited 0, and the
+# model announced a handoff that never happened.
+#
+# Two reasons this is worse than a no-op. PIDs recycle: if the stale id is
+# alive again and belongs to a *different* live wrapper, the touch SIGTERMs
+# someone else's session. And the payload is 0600 conversation content left
+# under a key whose owner already ran its cleanup trap.
+#
+# The question the guard has to answer is ancestry — the same check the hook
+# makes at handoff-prompt-hook.sh's is_wrapper_ancestor(). Case O is the
+# control positive: a guard that refuses everything would pass N alone.
+run_block() {
+  B_HOME=$(mktemp -d)
+  B_OUT=$(HOME="$B_HOME" CLAUDE_HANDOFF_ID="$2" sh -c "$1" 2>&1)
+  B_RC=$?
+  B_LEAKED=$(find "$B_HOME" -name 'handoff-*' 2>/dev/null | wc -l | tr -d ' ')
+  rm -rf "$B_HOME"
+}
+
+for WHICH in skill cmd; do
+  case "$WHICH" in
+    skill) BLOCK=$SKILL_BLOCK; WHO="the skill's block" ;;
+    cmd)   BLOCK=$CMD_BLOCK;   WHO="/handoff's block" ;;
+  esac
+
+  # 999999 is above the default PID ceiling, so it is neither alive nor an
+  # ancestor — the shape of an id inherited from a wrapper that has exited.
+  run_block "$BLOCK" 999999
+  if [ "$B_RC" -ne 0 ] && [ "$B_LEAKED" = 0 ]; then
+    ok "N: $WHO refuses a stale CLAUDE_HANDOFF_ID no wrapper is watching"
+  else
+    no "N: $WHO acted on a stale CLAUDE_HANDOFF_ID (rc=$B_RC leaked=$B_LEAKED) — seeds nothing and reports success"
+  fi
+
+  # Control positive: $TEST_PID really is an ancestor of the block below.
+  run_block "$BLOCK" "$TEST_PID"
+  if [ "$B_RC" -eq 0 ] && [ "$B_LEAKED" = 3 ]; then
+    ok "O: $WHO still hands off when the wrapper IS an ancestor"
+  else
+    no "O: $WHO broke the supervised path (rc=$B_RC leaked=$B_LEAKED out=$B_OUT)"
+  fi
+done
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

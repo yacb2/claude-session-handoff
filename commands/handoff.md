@@ -1,7 +1,7 @@
 ---
 description: Cierra la sesión actual y abre una nueva, sembrando contexto de handoff
 argument-hint: [prompt opcional — si va vacío, Claude lo genera del contexto actual]
-allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Bash(cat:*), Bash(umask:*), Write
+allowed-tools: Bash(sh:*), Bash(printf:*), Bash(touch:*), Bash(mkdir:*), Bash(test:*), Bash(cat:*), Bash(umask:*), Bash(ps:*), Bash(tr:*), Write
 ---
 
 # /handoff
@@ -68,7 +68,7 @@ hazlo solo cuando de verdad hay bifurcación.
 
 ## Ejecuta el handoff
 
-Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: `$CLAUDE_HANDOFF_ID` tiene que estar seteado — si no, el wrapper no está corriendo y no podemos cerrar.
+Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: no alcanza con que `$CLAUDE_HANDOFF_ID` esté seteado. El wrapper la exporta como su propio PID y **todo descendiente la hereda**, incluidas sesiones que el wrapper nunca lanzó ni supervisa (`--fork-session`, `--resume`, un job en background del harness): ahí la variable está seteada y su wrapper ya murió. Lo que distingue "mi wrapper me está mirando" de "acá corrió un wrapper alguna vez" es la ascendencia, así que el bloque recorre la cadena de padres.
 
 ```sh
 # `test -z`, no `[ -z ]`: the allowed-tools matcher treats `[` as a different
@@ -76,6 +76,25 @@ Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el 
 # stands in for `echo` below.
 if test -z "$CLAUDE_HANDOFF_ID"; then
   printf '%s\n' "handoff: no se detectó el wrapper. Lanza claude vía la función del shell que instala claude-session-handoff." >&2
+  exit 1
+fi
+
+# Mismo chequeo que is_wrapper_ancestor() en handoff-prompt-hook.sh, escrito
+# con las palabras de comando que allowed-tools declara: una variable seteada
+# solo prueba que hubo un wrapper arriba en el árbol, no que el mío siga vivo.
+is_wrapper_ancestor() {
+  _pid=$$
+  while _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' '); test -n "$_pid"; do
+    case "$_pid" in
+      0|1) return 1 ;;
+    esac
+    test "$_pid" = "$CLAUDE_HANDOFF_ID" && return 0
+  done
+  return 1
+}
+
+if ! is_wrapper_ancestor; then
+  printf '%s\n' "handoff: el wrapper PID $CLAUDE_HANDOFF_ID no es ancestro de esta sesión (variable heredada o stale). No se escribió nada y esta sesión no se va a cerrar." >&2
   exit 1
 fi
 
@@ -99,4 +118,6 @@ touch "$FLAG_FILE"
 touch "$EXIT_TRIGGER"
 ```
 
-Después de tocar `$EXIT_TRIGGER`, no agregues más output — el watcher del wrapper detecta el archivo en ~0.5s, manda SIGTERM a claude, y levanta la sesión nueva.
+Mira el exit status del bloque antes de decidir qué decir. Distinto de cero significa que se negó y ya imprimió por qué: no se escribió nada, esta sesión no se cierra, y quedarte callado deja al usuario mirando un handoff que nunca ocurrió. Reporta el motivo en ese mismo turno y para.
+
+Solo con exit 0, después de tocar `$EXIT_TRIGGER`, no agregues más output — el watcher del wrapper detecta el archivo en ~0.5s, manda SIGTERM a claude, y levanta la sesión nueva.
