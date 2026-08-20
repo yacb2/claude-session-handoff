@@ -42,7 +42,7 @@ records the link; deletes the payload (one-shot)
 New session opens with the handoff context loaded.
 ```
 
-## Three ways to trigger a handoff
+## Five ways to trigger a handoff
 
 ### 1. `handoff: <text>` (zero tokens, you write the prompt)
 
@@ -54,14 +54,7 @@ New session opens with the handoff context loaded.
 
 The hook intercepts it. No tokens consumed this turn. The new session opens with that text as seeded context.
 
-Two variants on the same path, also free:
-
-- **`handoff`** — seeds the previous session's **last reply**, which the hook reads straight out
-  of the transcript. For the case the skill cannot serve: a session long enough that prompting it
-  at all is expensive, where drafting a proper brief means one request over the whole
-  conversation with a cold cache. The payload is labelled as a raw tail, because it is one — no
-  goal, no state, no next step. Cheaper than a brief, and worse than one.
-- **`handoff --clean`** — seeds nothing. A genuinely empty session.
+The same hook serves two more forms with no text at all — **4** and **5** below.
 
 ### 2. `/handoff [optional text]` (slash command)
 
@@ -122,9 +115,8 @@ truncates the tail:
 ↻2 · Refactor auth      3h ago    feature/auth   210 KB
 ```
 
-The ordinal is not parsed back out of the title — `Ctrl+R` lets you rename a session, which would
-silently overwrite it. It is read from an append-only record at
-`~/.claude/handoff-chains/<project>.jsonl`, one line per link:
+The ordinal is never parsed back out of the title, because the title is not ours to trust: it is
+read from an append-only record at `~/.claude/handoff-chains/<project>.jsonl`, one line per link:
 
 ```json
 {"chain":"c1","n":3,"slug":"Refactor auth","session":"…","prev":"…","wrapper":"4711","at":"…Z"}
@@ -135,8 +127,23 @@ resume an old link, hand off again, and two sessions are legitimately the N+1th 
 parent. The newcomer is marked `"sibling":true` rather than renumbered.
 
 The chain is named by the `slug:` line the brief opens with, so `handoff: <text>` re-describes it
-and bare `handoff` inherits it. `--uninstall` leaves the records alone: they are history, not
-install state.
+and bare `handoff` inherits it.
+
+**`Ctrl+R` renames the chain, not just the row.** Rename a session in the picker and the next
+handoff carries that name forward — the record is what makes the rename detectable, since we
+write `↻N · <recorded slug>` and a title reading anything else is a human having named it. The
+full order of precedence:
+
+```
+brief slug:  →  deliberate Ctrl+R rename  →  the record  →  transcript title  →  <branch> <HH:MM>
+```
+
+Claude Code's own auto-titler is deliberately excluded **from the override**: only a rename you
+made can displace a name the chain already has, because a name that re-derives itself once per
+link is as unreadable as a frozen one. It is still consulted at step 4, where the chain has no
+recorded name to keep.
+
+`--uninstall` leaves the records alone: they are history, not install state.
 
 ## Requirements
 
@@ -204,12 +211,16 @@ variants each need a different sequence per emulator.
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |
-| `tests/smoke.sh` | Installer protocol + hook output validation (8 cases, 38 asserts). Requires `claude-restart` as a sibling repo. |
+| `tests/smoke.sh` | Installer protocol + hook output validation (11 cases, 45 asserts). Requires `claude-restart` as a sibling repo. |
 | `tests/wrapper-dispatch.sh` | Drives the wrapper's dispatch loop against a stub `claude` and asserts what it relaunches with. |
 | `tests/hook-guard.sh` | Regression tests for the UserPromptSubmit hook's guards, plus a check that no eval query can satisfy the eval by firing the hook instead of the skill. |
 | `tests/skill-consistency.sh` | Asserts the skill's `when_to_use` front-matter and its body enumerate the same trigger cases. |
 | `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). Derives a legacy boolean set from `expect`. |
 | `tests/eval-pty.sh` | Interactive trigger eval over a real PTY. Scores `execute` / `propose` / `ignore` separately — a query the skill must ask about first is verified by confirming on a second turn. |
+| `tests/installer-safety.sh` | Data-safety guards on everything the installer writes to user files — rc rewrites, `settings.json`, dependency checks. Drives **both** installers, so a shared-protocol fix applied to only one repo fails here. |
+| `tests/wrapper-atomic-install.sh` | Asserts *how* the installer writes files: the wrapper is replaced atomically, never overwritten in place under a running session. |
+| `tests/session-title-smoke.sh` | One model call checking that the Claude Code binary still honours a hook's `sessionTitle`. It registers its own throwaway hook, so a failure means the binary changed, not this repo. |
+| `tests/eval-pty-report.sh` | Covers `eval-pty.sh`'s own reporting in seconds instead of the ~1 h real run. |
 
 ## Limitations
 
@@ -220,7 +231,7 @@ variants each need a different sequence per emulator.
 - **A title file can outlive its handoff**: the wrapper clears the payload and flag on exit but knows nothing about `handoff-title-<pid>` — it is shared byte-for-byte with `claude-restart`, which has no lineage. Close a session right after triggering a handoff and the title survives; a later wrapper that recycles the PID will title and record a session that was never handed off. Cosmetic, one spurious link, and the record shows it.
 - **Lineage is per-project**: `claude --resume` is scoped to one project by default (`Ctrl+A` widens it). Ordinals make a chain legible *within* a project; across projects the slug does the work. And a chain started by the slash command or the skill takes its predecessor from the last link recorded under the same wrapper PID, so a recycled PID in the same project can inherit a stranger's ordinal — cosmetic, and the record shows it.
 - **Payload is one-shot**: each handoff seeds exactly one session and is deleted afterwards. There is no persistent state.
-- **Skill trigger eval is conservative**: the `tests/eval-trigger.sh` harness uses `claude -p` with a slash-command shim, which under-measures side-effect-heavy skills like this one. Real interactive triggering is more reliable than the harness score.
+- **The skill does not fire on every natural-language request**: measured over real usage, 47 of 54 direct handoff requests handed off (**87%**, 2026-08-04 → 08-19). The seven that did not were requests the skill never loaded for, so nothing ran. The `tests/eval-trigger.sh` harness scores 84% on a different set, and the two are within each other's noise — treat neither as an upper bound on the other. The three explicit paths (`handoff:`, `handoff`, `/handoff`) do not depend on the skill and are not affected.
 
 ## Uninstall
 
