@@ -492,6 +492,7 @@ install() {
 
   atomic_install "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-ledger.sh" 755
   info "Handoff hook scripts installed"
 
   atomic_install "$SCRIPT_DIR/commands/handoff.md" "$COMMANDS_DIR/handoff.md"
@@ -536,7 +537,8 @@ uninstall() {
   echo "  Uninstalling claude-session-handoff..."
   echo ""
 
-  rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh"
+  rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" \
+    "$SCRIPTS_DIR/handoff-ledger.sh"
   info "Handoff hook scripts removed"
 
   rm -f "$COMMANDS_DIR/handoff.md"
