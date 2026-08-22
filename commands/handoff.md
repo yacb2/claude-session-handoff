@@ -104,6 +104,15 @@ mkdir -p "$HOME/.claude/tmp"
 # en 0600; el umask por defecto lo escribiría 0644, más legible que su origen.
 umask 077
 
+# Deltas del libro de cadena. Mismo patrón de dejar un archivo que el payload,
+# y por el mismo motivo: esta sesión no conoce ni su id ni su cadena, así que no
+# puede llavear un libro. El hook de SessionStart — el único lugar donde existe
+# la identidad de cadena — los aplica. OMITE este cat entero si nada cambió.
+DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
+cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
+<UN DELTA POR LÍNEA, U OMITE ESTE BLOQUE ENTERO>
+__HANDOFF_DELTA_EOF__
+
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
 EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"

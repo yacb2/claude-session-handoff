@@ -184,6 +184,54 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
      + (if $clean == "" then {} else {clean: true} end)' 2>/dev/null)
 fi
 
+# --- chain ledger ------------------------------------------------------------
+#
+# The brief is re-drafted from scratch every hop, so it carries only what the
+# outgoing session happened to re-type. Measured over 21 real links: items owed
+# to the user survived one hop 17% of the time, and 6 of those links carried no
+# drafted brief at all. The ledger is the durable half — append-only, one file
+# per chain, and an item leaves it only when a CLOSE event closes it.
+#
+# It lands HERE, after the lineage block, for one reason: $CHAIN is not knowable
+# any earlier. The outgoing session cannot key its own ledger — it does not know
+# its session id, let alone its chain — so it drops DELTAS in a wrapper-keyed
+# file the same way it drops the payload, and this side, which is the only place
+# chain identity exists, applies them. That is what keeps the write path free of
+# a chain lookup that would return nothing for any session whose predecessor
+# predates the chain store.
+#
+# Degrades with the lineage half: no jq, no stdin, no chain, no ledger. When it
+# degrades the delta file is KEPT, on the same rule the payload is kept under —
+# it is the outgoing session's only copy, and this hook is not the last chance
+# to apply it. The first draft consumed it instead, reasoning that an item
+# applied one ordinal late is worse than an item lost; that is backwards for a
+# mechanism whose entire purpose is that items are not lost, and it made the
+# ledger the one artifact discarded on a failure that preserves everything else.
+DELTA_FILE="${HOME}/.claude/tmp/handoff-ledger-${WRAPPER_ID}"
+LEDGER_BLOCK=""
+if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ]; then
+  LEDGER_FILE="${CHAIN_FILE%.jsonl}.${CHAIN}.ledger"
+  LEDGER_SH="${HANDOFF_LEDGER_SH:-$(dirname "$0")/handoff-ledger.sh}"
+  if [ -r "$LEDGER_SH" ]; then
+    # Applied before rendering: these deltas were written by the PREVIOUS
+    # session and are addressed to this one. The delta file is removed as soon
+    # as it is durably in the ledger — if the emit below fails afterwards, the
+    # items are still recorded and the next link renders them, whereas a
+    # surviving delta file would append them a second time.
+    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "${N:-1}" 2>/dev/null
+    rm -f "$DELTA_FILE"
+    LEDGER_BLOCK=$(sh "$LEDGER_SH" render "$LEDGER_FILE" "${N:-1}" 2>/dev/null)
+  fi
+fi
+
+if [ -n "$LEDGER_BLOCK" ]; then
+  if [ -n "$WRAPPED" ]; then
+    WRAPPED=$(printf '%s\n\n%s' "$WRAPPED" "$LEDGER_BLOCK")
+  else
+    WRAPPED="$LEDGER_BLOCK"
+  fi
+fi
+
 if [ -n "$PAYLOAD" ]; then
   PAYLOAD_BYTES=$(printf '%s' "$PAYLOAD" | wc -c | tr -d ' ')
   BANNER="↻ Handoff recibido — sesión nueva sembrada con ${PAYLOAD_BYTES} bytes de la sesión previa. Cuando escribas, Claude abrirá confirmando el handoff."

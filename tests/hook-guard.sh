@@ -948,6 +948,9 @@ run_block() {
   B_OUT=$(HOME="$B_HOME" CLAUDE_HANDOFF_ID="$2" sh -c "$1" 2>&1)
   B_RC=$?
   B_LEAKED=$(find "$B_HOME" -name 'handoff-*' 2>/dev/null | wc -l | tr -d ' ')
+  # Names, not just the count: Case O asserts WHICH sentinels were written, and
+  # the sandbox is gone by the time it looks.
+  B_NAMES=$(find "$B_HOME" -name 'handoff-*' -exec basename {} \; 2>/dev/null | sort | tr '\n' ' ')
   rm -rf "$B_HOME"
 }
 
@@ -967,11 +970,21 @@ for WHICH in skill cmd; do
   fi
 
   # Control positive: $TEST_PID really is an ancestor of the block below.
+  # Asserted by NAME, not by count. The count was 3 until the chain ledger added
+  # a fourth sentinel, and a bare number cannot tell "the block grew a feature"
+  # apart from "the block wrote the wrong files" — which is the only thing this
+  # case is for. The three below are the ones the wrapper's watcher acts on.
   run_block "$BLOCK" "$TEST_PID"
-  if [ "$B_RC" -eq 0 ] && [ "$B_LEAKED" = 3 ]; then
+  B_SENTINELS=0
+  for _f in payload flag exit; do
+    case " $B_NAMES " in
+      *" handoff-$_f-$TEST_PID "*) B_SENTINELS=$((B_SENTINELS + 1)) ;;
+    esac
+  done
+  if [ "$B_RC" -eq 0 ] && [ "$B_SENTINELS" = 3 ]; then
     ok "O: $WHO still hands off when the wrapper IS an ancestor"
   else
-    no "O: $WHO broke the supervised path (rc=$B_RC leaked=$B_LEAKED out=$B_OUT)"
+    no "O: $WHO broke the supervised path (rc=$B_RC sentinels=$B_SENTINELS wrote=[$B_NAMES] out=$B_OUT)"
   fi
 done
 

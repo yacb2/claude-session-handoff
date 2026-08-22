@@ -114,6 +114,43 @@ and it is more stable than any phrasing produced per hop.
 One line, and no ordinal of your own — the ordinal comes from the record, and a hand-written one
 would be counted twice.
 
+### The chain ledger — what the brief must stop carrying
+
+A session in an established chain opens with a `=== CHAIN LEDGER ===` block above the brief.
+It is not something a previous session re-typed: it is a per-chain file the `SessionStart` hook
+renders with no model involved, and an item leaves it **only when a `CLOSE` delta closes it**.
+
+That block exists because the brief cannot hold these things. The brief is re-drafted from
+scratch at every hop, so it carries what the outgoing session happened to touch. Measured over
+21 real links on 2026-08-22: a fact survives one hop 33% of the time, and the decay does not
+care whether the fact was allowed to expire — items owed to the user survived **17%**, the worst
+class of all. In one seven-link chain the "Owed by the owner" block travelled links 1 to 4 and
+then vanished at link 5, unclosed and undecided; two links later nothing referenced it. And 6 of
+those 21 links carried no drafted brief at all, because bare `handoff` seeds the transcript tail
+with no model in the loop — so no rule written here can reach them. The ledger can, which is the
+whole reason it is a file and not a better instruction.
+
+**Do not re-type ledger items into the brief.** They are already carried, and copying them back
+is how the two records start disagreeing. The brief keeps what it is good at: the volatile
+state, re-verified each hop.
+
+Three kinds of thing go in, and nothing else:
+
+| Delta line | For |
+|---|---|
+| `CHARTER <text>` | What this chain exists to do. Written once, at the chain's first handoff. |
+| `OPEN OWED <text>` | A decision only the user can make. **This is where a recorded fork goes** — the `Next concrete step` fork survives one hop; an `OWED` item survives until answered. |
+| `OPEN RULE <text>` | A standing constraint of theirs — "do not merge or push this branch". |
+| `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
+
+Ids are assigned by the mechanism, never written by you — you can only reference an id the block
+already showed you. Volatile state, commit SHAs, gate results and next steps do **not** go in;
+they belong in the brief, where re-verifying them each hop is correct.
+
+**Every handoff writes its deltas.** Nothing changed is a legitimate answer and means writing
+none — but a session that settled an owed item and did not close it leaves the next six links
+reading a question the user already answered.
+
 Drafting rules:
 - Be terse. Skip any section that adds nothing — **except `Next concrete step`**, which is never
   skipped.
@@ -216,6 +253,16 @@ mkdir -p "$HOME/.claude/tmp"
 # The payload is conversation content. Claude Code stores transcripts 0600; the
 # default umask would write this 0644, i.e. more readable than its source.
 umask 077
+
+# Ledger deltas. Same drop-a-file pattern as the payload, and for the same
+# reason: this session knows neither its own id nor its chain, so it cannot key
+# a ledger. The SessionStart hook — the one place chain identity exists — applies
+# these. OMIT this whole cat when nothing changed; an empty delta is a no-op but
+# a fabricated one is a lie that outlives the session.
+DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
+cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
+<ONE DELTA PER LINE, OR OMIT THIS BLOCK ENTIRELY>
+__HANDOFF_DELTA_EOF__
 
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
