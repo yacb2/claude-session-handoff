@@ -144,9 +144,9 @@ ledger_render() {
         n++
         if (n > cap) { extra++; continue }
         age = now - born[id]
-        if (age <= 0) label="opened at this link"
-        else if (age == 1) label=sprintf("opened at link %s, 1 link ago", born[id])
-        else label=sprintf("opened at link %s, %d links ago", born[id], age)
+        if (age <= 0) label=sprintf("opened at link %s", born[id])
+        else if (age == 1) label=sprintf("opened at link %s, carried 1 link", born[id])
+        else label=sprintf("opened at link %s, carried %d links", born[id], age)
         printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
       }
       if (extra > 0) printf "  ... and %d more open items, not shown (cap %d). The list is too long: close what is settled.\n", extra, cap

@@ -218,7 +218,16 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ]; then
     # as it is durably in the ledger — if the emit below fails afterwards, the
     # items are still recorded and the next link renders them, whereas a
     # surviving delta file would append them a second time.
-    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "${N:-1}" 2>/dev/null
+    # Stamped with the link that WROTE the delta, which is the one before this
+    # one — the deltas arriving here were written at the end of the previous
+    # session. Stamping them with the arriving ordinal reads off by one to the
+    # only person who cares: a charter decided at link 1 rendered as "set at
+    # link 2", and an item's age understated every hop it had actually been
+    # carried. Floored at 1 for the degenerate case of a first link that somehow
+    # receives deltas.
+    WROTE_AT=$(( ${N:-1} - 1 ))
+    [ "$WROTE_AT" -ge 1 ] || WROTE_AT=1
+    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "$WROTE_AT" 2>/dev/null
     rm -f "$DELTA_FILE"
     LEDGER_BLOCK=$(sh "$LEDGER_SH" render "$LEDGER_FILE" "${N:-1}" 2>/dev/null)
   fi
