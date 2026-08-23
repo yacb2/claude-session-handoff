@@ -547,6 +547,46 @@ if command -v python3 >/dev/null 2>&1; then
     no "D2: quoted transcript lines were emitted unprefixed"
   fi
 
+  # A session whose last act was pasting a document — one turn larger than the
+  # whole budget. The tail loop used to BREAK on it, taking every recent turn
+  # with it, so the digest held the opening and nothing from the hours that
+  # matter. And with nothing but that turn, both ends came back empty and the
+  # digest was the elision notice alone: 73 bytes, exit 0, and a subagent spent
+  # on an empty file.
+  {
+    # The early turns have to be big enough to FILL the head budget, or every
+    # later turn lands in the head and the tail loop is never exercised — which
+    # is how the first version of this case passed against the broken build.
+    PAD=$(awk 'BEGIN{while(i++<4000) printf "e"}')
+    i=0
+    while [ "$i" -lt 40 ]; do
+      printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"early %s %s"}]}}\n' "$i" "$PAD"
+      i=$((i + 1))
+    done
+    i=0
+    while [ "$i" -lt 5 ]; do
+      printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"LATE-DECISION %s"}]}}\n' "$i"
+      i=$((i + 1))
+    done
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' \
+      "$(awk 'BEGIN{while(i++<150000) printf "Z"}')"
+  } > "$FBOX/tailbomb.jsonl"
+  KEPT=$(python3 "$FILTER" "$FBOX/tailbomb.jsonl" 2>/dev/null | grep -c 'LATE-DECISION')
+  if [ "$KEPT" = "5" ]; then
+    ok "D4: one oversized final turn is skipped and the recent turns before it survive"
+  else
+    no "D4: an oversized final turn took the tail with it ($KEPT of 5 kept)"
+  fi
+
+  printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' \
+    "$(awk 'BEGIN{while(i++<300000) printf "Q"}')" > "$FBOX/giant.jsonl"
+  GOUT=$(python3 "$FILTER" "$FBOX/giant.jsonl" 2>/dev/null)
+  if printf '%s' "$GOUT" | grep -q 'QQQQQQQQQQ'; then
+    ok "D5: a single turn bigger than the budget yields its end, not an elision notice alone"
+  else
+    no "D5: the digest carried no content from the one turn there was"
+  fi
+
   # An empty transcript must exit non-zero with nothing on stdout: the callers
   # degrade to silence, and a zero-byte digest that exits 0 would have them
   # emit a pointer to nothing.
@@ -725,6 +765,87 @@ if [ "$(awk -F'\t' 'NR==1 {print $7}' "$YL")" = "retro" ] \
 else
   no "X2: provenance was not recorded, or an unknown source was written through"
   cat "$YL" | sed 's/^/     /'
+fi
+
+# --- Case Y: the emitted commands are RUN, not read ------------------------
+#
+# Every retro case above greps the block. That is how the block shipped with a
+# heredoc that never terminated: `<<'EOF'` with an indented `EOF` is not a
+# terminator, so the shell swallowed the apply and the rm into the file, the
+# retro recorded nothing, and a 200 KB digest was left on disk — all while the
+# suite stayed green, because the text it asserted on was present and correct.
+#
+# So this case extracts the commands from the block the hook actually emitted
+# and executes them, with a stub in place of the subagent.
+retro_box
+printf '%s\n' \
+  '{"type":"user","message":{"role":"user","content":"do the thing"}}' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"the reply that link ended on"}]}}' \
+  > "$SANDBOX/.claude/projects/-w-proj-under-test/Y1.jsonl"
+link Y1 'chain y' ''
+link Y2 'chain y' ''
+
+# Lines 'umask 077' through the rm: the block's own step 3, verbatim.
+SCRIPT=$(printf '%s\n' "$CTX" | sed -n '/^umask 077$/,/^rm -f /p')
+# Stand in for the subagent. Indented on purpose — a model copying the shape of
+# step 2's examples would indent, and the record must not absorb the verb into
+# the item text when it does.
+SCRIPT=$(printf '%s' "$SCRIPT" | sed "s|^<the delta lines.*|    OPEN OWED whether to ship on Friday\\
+    TURN dropped the parser approach\\
+    CLOSE d1 this must be refused|")
+
+YHOME="$SANDBOX" sh -c "$SCRIPT" >/dev/null 2>&1
+YRC=$?
+YLED="$SANDBOX/.claude/handoff-chains/$KEY.Y1.ledger"
+
+if [ "$YRC" -ne 0 ]; then
+  no "Y: the block's own commands exited $YRC"
+elif [ ! -f "$YLED" ]; then
+  no "Y: the commands ran but nothing reached the ledger"
+elif ls "$SANDBOX/.claude/tmp/"handoff-retro-* >/dev/null 2>&1; then
+  no "Y: the digest or the delta file was left behind"
+else
+  YOUT=$(sh "$LEDGER_SH" render "$YLED" 3 2>/dev/null)
+  YERR=""
+  # The item text must not carry its own verb: `cut -d' ' -f3-` keeps leading
+  # whitespace, so an indented line used to land as "  OPEN OWED whether to..."
+  awk -F'\t' '$3=="OPEN" && $6 ~ /^[[:space:]]*(OPEN|TURN|CLOSE)/ {exit 1}' "$YLED" \
+    || YERR="$YERR verb-in-text"
+  printf '%s' "$YOUT" | grep -q 'whether to ship on Friday' || YERR="$YERR missing-open"
+  printf '%s' "$YOUT" | grep -q 'dropped the parser approach' || YERR="$YERR missing-turn"
+  # Provenance, and the guard it carries.
+  [ "$(awk -F'\t' 'NR==1 {print $7}' "$YLED")" = "retro" ] || YERR="$YERR no-provenance"
+  awk -F'\t' '$3=="CLOSE"' "$YLED" | grep -q . && YERR="$YERR close-accepted"
+  # 0600: the delta is a subagent's conclusions drawn from a 0600 transcript.
+  if [ -z "$YERR" ]; then
+    ok "Y: the block's own commands run, record the deltas, refuse the CLOSE and clean up"
+  else
+    no "Y: running the emitted block went wrong —$YERR"
+    cat "$YLED" | sed 's/^/     /'
+  fi
+fi
+
+# --- Case Y2: the retro's writes do not silence the staleness warning ------
+#
+# The renderer excluded NOTE from `lastwrite` and nothing else, so a
+# retro-sourced entry counted as a session having confirmed the ledger. The
+# retro fires on exactly the model-free links, unconditionally, and it is
+# forbidden to CLOSE — so it can never establish that an open item still
+# stands. An item nobody had looked at for four links rendered as fresh.
+box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+ZL="$SANDBOX/.claude/handoff-chains/z.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tan item nobody has revisited\tsession\n' > "$ZL"
+for n in 2 3 4 5; do
+  printf '2026-08-23T00:00:00Z\t%s\tTURN\t-\t-\trecovered from the transcript\tretro\n' "$n" >> "$ZL"
+done
+ZOUT=$(sh "$LEDGER_SH" render "$ZL" 6 2>/dev/null)
+if printf '%s' "$ZOUT" | grep -q 'STALE:' \
+  && printf '%s' "$ZOUT" | grep -q 'since link 1'; then
+  ok "Y2: four links of recovered entries still report the ledger unconfirmed since link 1"
+else
+  no "Y2: recovered entries silenced the staleness warning"
+  printf '%s\n' "$ZOUT" | sed -n '/STALE/,$p' | sed 's/^/     /'
 fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
