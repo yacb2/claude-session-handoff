@@ -253,5 +253,72 @@ else
   printf '%s\n' "$CTX" | grep '  d' | sed 's/^/     /'
 fi
 
+# --- Case J: a course correction is history, not an obligation --------------
+#
+# TURN records that the work CHANGED direction — an approach dropped because
+# something worked better, a problem found mid-execution. It must never join the
+# open list (nothing closes it) and it must survive into the trajectory, which
+# is what tells an arriving session where the chain has been, not just where it
+# stands.
+box
+link J0 'chain j' ''
+link J1 'chain j' 'OPEN OWED a real obligation.
+TURN dropped the chain-id lookup; the wrapper-keyed drop removes the failure mode.'
+link J2 'chain j' ''
+if printf '%s' "$CTX" | grep -q 'turn — dropped the chain-id lookup' \
+  && printf '%s' "$CTX" | grep -q 'HOW THIS CHAIN GOT HERE'; then
+  ok "J: a TURN renders in the trajectory"
+else
+  no "J: the course correction did not reach the trajectory"
+fi
+if printf '%s' "$CTX" | grep -E '^  d[0-9]+ ' | grep -q 'chain-id lookup'; then
+  no "J2: a TURN leaked into the open-item list, where nothing can ever close it"
+else
+  ok "J2: a TURN stays out of the open list"
+fi
+
+# --- Case K: correcting an earlier item without rewriting history -----------
+#
+# The file is append-only, so a correction is a CLOSE carrying what actually
+# turned out plus an OPEN of the corrected item. Both lines stay, in order, with
+# the link each happened at — which is the trajectory the owner asked for.
+box
+link K0 'chain k' ''
+link K1 'chain k' 'OPEN RULE deltas are discarded when the ledger cannot be keyed.'
+link K2 'chain k' 'CLOSE d1 wrong: the payload is preserved on that path, so the ledger must be too.
+OPEN RULE deltas are kept when the ledger cannot be keyed, exactly as the payload is.'
+link K3 'chain k' ''
+if printf '%s' "$CTX" | grep -q 'closed d1 — wrong: the payload is preserved' \
+  && printf '%s' "$CTX" | grep -q 'd2 .*deltas are kept' \
+  && ! printf '%s' "$CTX" | grep -E '^  d[0-9]+ ' | grep -q 'deltas are discarded'; then
+  ok "K: a corrected item leaves the open list but its correction stays on the record"
+else
+  no "K: correcting an item lost either the old line or the new one"
+  printf '%s\n' "$CTX" | grep -E '^  |closed' | sed 's/^/     /'
+fi
+
+# --- Case L: a frozen ledger says so ----------------------------------------
+#
+# The bare-`handoff` path writes no deltas, so a run of those links carries the
+# list forward and updates none of it. Without this the ledger reads exactly the
+# same whether it was confirmed this link or three links ago.
+box
+link L0 'chain l' ''
+link L1 'chain l' 'OPEN RULE do not push.'
+if printf '%s' "$CTX" | grep -q '^STALE:'; then
+  no "L: a ledger written this very link claimed to be stale"
+else
+  ok "L: a freshly written ledger carries no staleness warning"
+fi
+link L2 'chain l' ''
+link L3 'chain l' ''
+link L4 'chain l' ''
+if printf '%s' "$CTX" | grep -q 'STALE: 3 link(s)'; then
+  ok "L2: three links with no delta written are reported as such"
+else
+  no "L2: a frozen ledger read as freshly confirmed"
+  printf '%s\n' "$CTX" | grep -i stale | sed 's/^/     /'
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

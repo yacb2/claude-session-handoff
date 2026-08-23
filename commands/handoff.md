@@ -110,7 +110,7 @@ umask 077
 # la identidad de cadena — los aplica. OMITE este cat entero si nada cambió.
 DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
 cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
-<UN DELTA POR LÍNEA, U OMITE ESTE BLOQUE ENTERO>
+<UN DELTA POR LÍNEA — OPEN / CLOSE / TURN / CHARTER — U OMITE ESTE BLOQUE ENTERO>
 __HANDOFF_DELTA_EOF__
 
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"

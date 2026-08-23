@@ -142,6 +142,19 @@ Three kinds of thing go in, and nothing else:
 | `OPEN OWED <text>` | A decision only the user can make. **This is where a recorded fork goes** — the `Next concrete step` fork survives one hop; an `OWED` item survives until answered. |
 | `OPEN RULE <text>` | A standing constraint of theirs — "do not merge or push this branch". |
 | `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
+| `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. |
+
+**Correcting something an earlier link got wrong needs no rewrite, and must not get
+one.** The file is append-only. `CLOSE` the item with what actually turned out, then
+`OPEN` the corrected one: both lines stay, in order, with the link each happened at.
+That is the trajectory an arriving session reads to learn where the chain has *been*,
+not only where it stands — and rewriting history would destroy exactly that.
+
+**Promotion — how an item leaves for good.** An item that turns out to deserve
+permanence does not stay here. Write it as an ADR, a backlog item or a plan, then
+`CLOSE` it naming that reference. The ledger is the *pre-artifact* layer: what is owed
+inside this chain and not yet worth a document. Skipping this is how it silently
+becomes a second backlog that nothing reindexes and no one archives.
 
 Ids are assigned by the mechanism, never written by you — you can only reference an id the block
 already showed you. Volatile state, commit SHAs, gate results and next steps do **not** go in;
@@ -175,6 +188,12 @@ and a large batch unpublished — a genuine fork. The brief did not record it, s
 inferred it from an intentless first message and opened with *"'Continue' can mean two very
 different things here"*. Same fork, but blamed on the user's word instead of read off the state.
 Recorded, it opens as *"the next step is your call: A or B"* — the handoff working, not failing.
+
+**A recorded fork belongs in the ledger, not only in the brief.** `Next concrete step` is
+re-drafted at the next hop and the fork survives exactly as long as some session happens
+to re-type it — measured at 17% per hop, the worst-surviving class there is. `OPEN OWED`
+survives until you answer it. Write it in both if the next step really is the fork; write
+it in the ledger regardless.
 
 Watch the quieter route to the same place: instead of skipping the section, the fork gets demoted
 into `Constraints / gotchas` as a prohibition — *"do not push without an explicit ask"* — while
@@ -261,7 +280,7 @@ umask 077
 # a fabricated one is a lie that outlives the session.
 DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
 cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
-<ONE DELTA PER LINE, OR OMIT THIS BLOCK ENTIRELY>
+<ONE DELTA PER LINE — OPEN / CLOSE / TURN / CHARTER — OR OMIT THIS BLOCK ENTIRELY>
 __HANDOFF_DELTA_EOF__
 
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
