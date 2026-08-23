@@ -51,10 +51,13 @@ set -u
 
 LEDGER_MAX_ITEMS=24
 
-# How many trajectory entries render per link. Six is two-to-three sessions of
-# real turns — enough to see the direction of travel, short enough that a long
-# chain does not re-inject its whole history at every hop.
-LEDGER_TRAIL=6
+# How much trajectory renders per link, expressed in LINKS rather than in a
+# number of entries. A fixed count was the first design and the owner rejected
+# it for the right reason: it cuts a long chain at an arbitrary line and it
+# over-serves a short one. Three links shows a short chain in full and shows a
+# phased plan its recent phases COMPLETE, which is the unit the reader actually
+# thinks in.
+LEDGER_TRAIL_LINKS=3
 
 # Model-written text joined into a rendered block: one line, no control
 # characters, bounded. Same treatment the slug already gets in the sibling hook,
@@ -154,12 +157,12 @@ ledger_render() {
   [ -f "$_ledger" ] || return 0
   [ -s "$_ledger" ] || return 0
 
-  _body=$(awk -F'\t' -v now="$_n" -v cap="$LEDGER_MAX_ITEMS" -v trail="$LEDGER_TRAIL" '
+  _body=$(awk -F'\t' -v now="$_n" -v cap="$LEDGER_MAX_ITEMS" -v trail="$LEDGER_TRAIL_LINKS" '
     { if ($2+0 > lastwrite) lastwrite=$2+0 }
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
-    $3=="CLOSE"   { closed[$4]=1; ev[++e]=sprintf("link %s  closed %s — %s", $2, $4, $6); next }
-    $3=="TURN"    { ev[++e]=sprintf("link %s  turn — %s", $2, $6); next }
+    $3=="CLOSE"   { closed[$4]=1; e++; ev[e]=sprintf("link %s  closed %s — %s", $2, $4, $6); evn[e]=$2+0; evt[e]=$4 " " $6; next }
+    $3=="TURN"    { e++; ev[e]=sprintf("link %s  turn — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
     END {
       if (charter != "") printf "CHARTER (set at link %s): %s\n\n", charter_n, charter
       n=0
@@ -173,6 +176,7 @@ ledger_render() {
         else if (age == 1) label=sprintf("opened at link %s, carried 1 link", born[id])
         else label=sprintf("opened at link %s, carried %d links", born[id], age)
         printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
+        openset[id]=1
       }
       if (extra > 0) printf "  ... and %d more open items, not shown (cap %d). The list is too long: close what is settled.\n", extra, cap
       if (n == 0 && charter == "" && e == 0) exit 1
@@ -182,10 +186,29 @@ ledger_render() {
       # this mechanism exists instead of. The full file is named below it, so
       # anything older is one `cat` away rather than lost.
       if (e > 0) {
-        printf "\nHOW THIS CHAIN GOT HERE — most recent first, older entries are in the file:\n"
-        shown=0
-        for (i=e; i>=1 && shown<trail; i--) { printf "  %s\n", ev[i]; shown++ }
-        if (e > shown) printf "  ... %d earlier entries, in the ledger file.\n", e - shown
+        cut = now - trail
+        printf "\nHOW THIS CHAIN GOT HERE — most recent first:\n"
+        shown=0; held=0; oldest_held=0; newest_held=0
+        for (i=e; i>=1; i--) {
+          if (evn[i] >= cut) { printf "  %s\n", ev[i]; shown++; continue }
+          # Older than the window. One exact exception, and deliberately only
+          # one: an entry that NAMES an item still open is provably about
+          # something live, however old it is. No keyword guessing — a fuzzy
+          # relevance filter that picks wrong is worse than none, because the
+          # reader cannot tell a quiet miss from "nothing older mattered".
+          keep=0
+          for (id in openset) if (index(evt[i], id) > 0) keep=1
+          if (keep) { printf "  %s   <- still bears on an open item\n", ev[i]; shown++; continue }
+          held++
+          if (oldest_held == 0 || evn[i] < oldest_held) oldest_held = evn[i]
+          if (evn[i] > newest_held) newest_held = evn[i]
+        }
+        if (held > 0) {
+          if (oldest_held == newest_held)
+            printf "\n  %d more entr%s from link %d, not shown here. The chain is longer than\n  this window: read the file named below if you need what came before.\n", held, (held==1?"y":"ies"), oldest_held
+          else
+            printf "\n  %d more entries from links %d-%d, not shown here. The chain is longer than\n  this window: read the file named below if you need what came before.\n", held, oldest_held, newest_held
+        }
       }
 
       # Links that passed with nobody writing a delta. The bare-`handoff` path
