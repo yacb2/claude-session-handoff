@@ -21,6 +21,7 @@ set -u
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SS_HOOK="$REPO/scripts/handoff-session-start.sh"
 LEDGER_SH="$REPO/scripts/handoff-ledger.sh"
+UP_HOOK="$REPO/scripts/handoff-prompt-hook.sh"
 
 command -v jq >/dev/null || { echo "jq not in PATH"; exit 1; }
 
@@ -39,7 +40,7 @@ box() {
   mkdir -p "$SANDBOX/.claude/tmp"
 }
 
-# link <session-id> <slug> <delta-or-empty>
+# link <session-id> <slug> <delta-or-empty> [mech-line-or-empty]
 #
 # The delta argument is what the session BEFORE this one wrote at its handoff —
 # that is the real flow, and the fixture has to model it or the ordinals drift.
@@ -52,6 +53,12 @@ link() {
     > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
   if [ -n "$3" ]; then
     printf '%s\n' "$3" > "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
+  fi
+  # The prompt hook's file, kept separate from the model's on purpose — see the
+  # comment block at MECH_FILE in handoff-session-start.sh. A fixture that
+  # merged them would pass while the mechanism it models was broken.
+  if [ -n "${4:-}" ]; then
+    printf '%s\n' "$4" > "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID"
   fi
   OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
     "$1" "$CWD" \
@@ -372,6 +379,240 @@ else
   no "N2: the carry-up matched the wrong entries (or none)"
   printf '%s\n' "$CTX" | sed -n '/HOW THIS/,/^$/p' | sed 's/^/     /'
 fi
+
+# --- Case P: a NOTE is history, never a confirmation -----------------------
+#
+# The bare-handoff path writes a mechanical pointer so the link is not invisible
+# in the trajectory. The trap is that the renderer's STALE line counts links
+# since anything CONFIRMED the ledger, and it reads that off the last written
+# event. Counting a hook-written pointer would pin the counter forward on every
+# bare handoff — the entry whose entire content is "no model was involved" would
+# be the thing hiding that no model has been involved for four links.
+box
+link P0 'chain p' ''
+link P1 'chain p' 'OPEN OWED an item nobody has revisited since.'
+link P2 'chain p' '' 'NOTE link ended model-free — bare handoff.'
+link P3 'chain p' '' 'NOTE link ended model-free — bare handoff.'
+link P4 'chain p' '' 'NOTE link ended model-free — bare handoff.'
+link P5 'chain p' '' 'NOTE link ended model-free — bare handoff.'
+
+if printf '%s' "$CTX" | grep -q 'note — link ended model-free' \
+  && printf '%s' "$CTX" | grep -q 'STALE:' \
+  && printf '%s' "$CTX" | grep -q 'nobody has revisited'; then
+  ok "P: a NOTE renders in the trajectory and does not silence the STALE warning"
+else
+  no "P: the NOTE was dropped, or it reset the staleness counter"
+  printf '%s\n' "$CTX" | sed -n '/HOW THIS/,$p' | sed 's/^/     /'
+fi
+
+# --- Case P2: a chain nothing has ever confirmed ---------------------------
+#
+# NOTE-only ledgers are now reachable: every link of a chain can end model-free.
+# The last-written link is then 0, and "stale since link 0" is not a fact — the
+# honest statement is that no session has ever written a delta here.
+box
+link Q0 'chain q' ''
+link Q1 'chain q' '' 'NOTE link ended model-free — bare handoff.'
+link Q2 'chain q' '' 'NOTE link ended model-free — bare handoff.'
+if printf '%s' "$CTX" | grep -q 'no session has ever written a delta' \
+  && ! printf '%s' "$CTX" | grep -q 'since link 0'; then
+  ok "P2: a ledger built only of NOTEs says nothing has been confirmed, not 'since link 0'"
+else
+  no "P2: the never-confirmed chain reported a bogus last-written link"
+  printf '%s\n' "$CTX" | sed -n '/STALE/,$p' | sed 's/^/     /'
+fi
+
+# --- Case R: the retro fires exactly where no model wrote deltas -----------
+#
+# The routing decision for the whole retro, and the one that is easy to get
+# backwards: the predicate is "a model was in the loop last link", read off the
+# delta file BEFORE apply consumes it. Fold the mechanical pointer into that
+# same file and the predicate is true on precisely the links the retro exists
+# to serve.
+retro_box() {
+  box
+  mkdir -p "$SANDBOX/.claude/projects/-w-proj-under-test"
+}
+# fake_transcript <session-id>
+fake_transcript() {
+  printf '%s\n' \
+    '{"type":"user","message":{"role":"user","content":"do the thing"}}' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"did the thing"}]}}' \
+    > "$SANDBOX/.claude/projects/-w-proj-under-test/$1.jsonl"
+}
+
+# The bare-handoff link writes the mechanical NOTE and no model delta — that is
+# the real shape, and passing both here is what makes the case guard the
+# conflation rather than merely the absence.
+retro_box
+link R1 'chain r' ''
+fake_transcript R1
+link R2 'chain r' '' 'NOTE link ended model-free — bare handoff.'
+if printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO' \
+  && printf '%s' "$CTX" | grep -q 'handoff-retro-filter.py' \
+  && printf '%s' "$CTX" | grep -q "$SANDBOX/.claude/projects/-w-proj-under-test/R1.jsonl"; then
+  ok "R: no model delta last link, predecessor transcript on disk -> the retro block is emitted"
+else
+  no "R: the retro block was missing or pointed at the wrong transcript"
+  printf '%s\n' "$CTX" | tail -20 | sed 's/^/     /'
+fi
+
+# --- Case R2: a model already wrote the deltas -----------------------------
+retro_box
+link S1 'chain s' ''
+fake_transcript S1
+link S2 'chain s' 'TURN the model wrote its own account of that link.'
+if ! printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO' \
+  && printf '%s' "$CTX" | grep -q 'wrote its own account'; then
+  ok "R2: a link whose model wrote deltas gets no retro — the account is already in hand"
+else
+  no "R2: the retro fired over deltas a model had already written"
+fi
+
+# --- Case R3: nothing to read degrades to silence --------------------------
+#
+# Every other path in these hooks degrades to silence. An instruction pointing
+# at a transcript that is not on disk is worse than no instruction: it spends a
+# turn and ends in an apology.
+retro_box
+link T1 'chain t' ''
+link T2 'chain t' ''
+if ! printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO'; then
+  ok "R3: no resolvable predecessor transcript -> no retro block, no pointer to nothing"
+else
+  no "R3: a retro block was emitted pointing at a transcript that does not exist"
+fi
+
+# --- Case R4: the retro is told not to close anything ----------------------
+#
+# The agent reads a transcript, and that transcript contains the predecessor's
+# OWN rendered ledger block — live ids and all. `ledger_apply` accepts any
+# d<n> as a CLOSE, so one echoed id retires a real open item permanently, in
+# the one mechanism whose stated property is that items leave only when
+# something closes them. Two independent guards: the filter cuts the block out
+# of the digest, and the instruction forbids CLOSE outright.
+retro_box
+link U1 'chain u' ''
+fake_transcript U1
+link U2 'chain u' ''
+if printf '%s' "$CTX" | grep -q 'must NOT write CLOSE lines'; then
+  ok "R4: the retro instruction forbids CLOSE — a wrong close is unrecoverable"
+else
+  no "R4: the retro instruction did not forbid CLOSE lines"
+fi
+
+# --- Case D: the filter keeps prose and drops everything else --------------
+#
+# Four things in one fixture because each one alone ships green. The third is
+# the one a reused predicate gets wrong: the sibling hook's extract_last_reply
+# selects assistant lines carrying NO tool_use, and most of a working session's
+# reasoning lives in text blocks on lines that DO carry a tool call.
+FILTER="$REPO/scripts/handoff-retro-filter.py"
+if command -v python3 >/dev/null 2>&1; then
+  FBOX=$(mktemp -d)
+  printf '%s\n' \
+    '{"type":"user","message":{"role":"user","content":"KEEP-user-prompt <system-reminder>DROP-reminder</system-reminder>"}}' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"KEEP-interleaved"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"DROP-toolinput"}}]}}' \
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"DROP-toolresult"}]}}' \
+    '{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"DROP-sidechain"}]}}' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"DROP-thinking"},{"type":"text","text":"KEEP-final === CHAIN LEDGER ===\nd2 OWED DROP-liveid\n=== END CHAIN LEDGER ==="}]}}' \
+    > "$FBOX/t.jsonl"
+  DIGEST=$(python3 "$FILTER" "$FBOX/t.jsonl" 2>/dev/null)
+  MISSING=""
+  for want in KEEP-user-prompt KEEP-interleaved KEEP-final; do
+    printf '%s' "$DIGEST" | grep -q "$want" || MISSING="$MISSING $want"
+  done
+  EXTRA=""
+  for bad in DROP-reminder DROP-toolinput DROP-toolresult DROP-sidechain DROP-thinking DROP-liveid; do
+    printf '%s' "$DIGEST" | grep -q "$bad" && EXTRA="$EXTRA $bad"
+  done
+  if [ -z "$MISSING" ] && [ -z "$EXTRA" ]; then
+    ok "D: the digest keeps prose from interleaved lines and drops tools, thinking, sidechains and the ledger block"
+  else
+    no "D: filter wrong — missing:${MISSING:-none} leaked:${EXTRA:-none}"
+  fi
+
+  # Every line prefixed, so no line of a quoted transcript can be read as a
+  # delimiter or as an instruction addressed to the reader.
+  if printf '%s' "$DIGEST" | grep -q '^| KEEP-final' \
+    && ! printf '%s' "$DIGEST" | grep -q '^KEEP'; then
+    ok "D2: every quoted line carries the prefix, so none of it can forge a delimiter"
+  else
+    no "D2: quoted transcript lines were emitted unprefixed"
+  fi
+
+  # An empty transcript must exit non-zero with nothing on stdout: the callers
+  # degrade to silence, and a zero-byte digest that exits 0 would have them
+  # emit a pointer to nothing.
+  : > "$FBOX/empty.jsonl"
+  if OUT=$(python3 "$FILTER" "$FBOX/empty.jsonl" 2>/dev/null); then
+    no "D3: an empty transcript exited 0"
+  elif [ -n "$OUT" ]; then
+    no "D3: an empty transcript wrote to stdout"
+  else
+    ok "D3: a transcript with no prose exits non-zero and writes nothing"
+  fi
+  rm -rf "$FBOX"
+else
+  no "D: python3 not in PATH — the filter could not be exercised"
+fi
+
+# --- Case R5: an empty predecessor id must not glob the world --------------
+#
+# Found against the live chain, not reasoned about. A chain's first link records
+# `prev: ""` — the skill path cannot know its own session id — and the retro
+# looks its predecessor up by session-id GLOB, deliberately, because the
+# transcript directory slug and the chain-store slug are different mappings.
+# With an empty id that glob is `.../projects/*/*.jsonl`, which on this machine
+# matched every transcript on disk, newest first. The retro would then have
+# pointed a subagent at a stranger's conversation and recorded its conclusions
+# in this chain's ledger.
+retro_box
+printf '%s\n' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a stranger conversation"}]}}' \
+  > "$SANDBOX/.claude/projects/-w-proj-under-test/someone-elses-session.jsonl"
+link V1 'chain v' ''
+if ! printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO'; then
+  ok "R5: a first link, whose predecessor id is empty, emits no retro and globs nothing"
+else
+  no "R5: an empty predecessor id matched an unrelated transcript"
+  printf '%s\n' "$CTX" | grep -A2 'python3' | sed 's/^/     /'
+fi
+
+# --- Case E: both hooks, end to end ----------------------------------------
+#
+# Every case above drives the SessionStart hook against a fixture that stands in
+# for the prompt hook. That is the right unit for the renderer and the wrong one
+# for the join: the two halves agree on a filename and nothing checks it. Get
+# that name wrong on either side and all 31 other cases stay green while a bare
+# handoff leaves the ledger nothing at all.
+#
+# The real prompt hook refuses unless $CLAUDE_HANDOFF_ID is an ancestor of the
+# running process, so this case uses the test shell's own PID.
+EBOX=$(mktemp -d)
+mkdir -p "$EBOX/.claude/tmp" "$EBOX/proj" "$EBOX/.claude/projects/-w-proj-under-test"
+printf '%s\n' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"the closing reply of that link"}]}}' \
+  > "$EBOX/prev.jsonl"
+
+printf '{"prompt":"handoff","session_id":"E1","cwd":"%s","transcript_path":"%s"}' \
+  "$EBOX/proj" "$EBOX/prev.jsonl" \
+  | HOME="$EBOX" CLAUDE_HANDOFF_ID="$$" sh "$UP_HOOK" >/dev/null 2>&1
+
+# Now the arriving session, keyed by the same wrapper id the prompt hook used.
+SANDBOX="$EBOX"
+CHID_SAVE="$CHID"; CHID="$$"
+link E1 'chain e' ''
+link E2 'chain e' ''
+CHID="$CHID_SAVE"
+
+if printf '%s' "$CTX" | grep -q 'note — link ended model-free'; then
+  ok "E: the prompt hook's pointer is picked up by the SessionStart hook and rendered"
+else
+  no "E: the two hooks disagree on where the mechanical line is written"
+  printf '%s\n' "$CTX" | sed -n '/HOW THIS/,$p' | sed 's/^/     /'
+fi
+rm -rf "$EBOX"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

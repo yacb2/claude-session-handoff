@@ -208,6 +208,9 @@ variants each need a different sequence per emulator.
 | `scripts/claude-wrapper.sh` | Unified POSIX wrapper that runs `claude` in a loop. On exit, checks per-PID flag files and either relaunches fresh (handoff) or with `--resume` (restart). Byte-for-byte identical to the copy in `claude-restart`. |
 | `scripts/handoff-session-start.sh` | SessionStart hook: reads `~/.claude/tmp/handoff-payload-<pid>` and `handoff-title-<pid>`, emits `additionalContext` (for Claude), `systemMessage` (banner for you) and `sessionTitle` (the picker row), appends the chain link, plus an optional bell under `HANDOFF_BELL=1`; deletes both files. |
 | `scripts/handoff-prompt-hook.sh` | UserPromptSubmit hook: intercepts `handoff` / `handoff: <text>` and triggers a handoff without going through the model. |
+| `scripts/handoff-ledger.sh` | The chain ledger: `apply` records a link's deltas, `render` prints the block the SessionStart hook injects. Append-only, one file per chain, no model involved — which is what lets it reach the model-free `handoff` paths too. |
+| `scripts/handoff-retro-filter.py` | Reduces a transcript to the prose a retro can read (measured 2.8 MB → 56 KB; 260 MB → 199 KB in 0.4s). Mechanical, no model. Feeds the `PREDECESSOR RETRO` block the SessionStart hook injects when the previous link ended without any model writing deltas. |
+| `scripts/ledger-readout.sh` | Read-only report over the recorded chains: how often deltas are actually written, and by which path. |
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |
@@ -217,6 +220,7 @@ variants each need a different sequence per emulator.
 | `tests/skill-consistency.sh` | Asserts the skill's `when_to_use` front-matter and its body enumerate the same trigger cases. |
 | `tests/eval-trigger.sh` | Skill description trigger eval (wraps `skill-creator`'s harness, hides the real skill to avoid shadow-skill measurement issues). Derives a legacy boolean set from `expect`. |
 | `tests/eval-pty.sh` | Interactive trigger eval over a real PTY. Scores `execute` / `propose` / `ignore` separately — a query the skill must ask about first is verified by confirming on a second turn. |
+| `tests/chain-ledger.sh` | Regression tests for the ledger and the two hooks that feed it, each driven against the real hook with an isolated `HOME`. Replays the measured decay (an item opened at link 1 must survive to link 7 across three links no model wrote). |
 | `tests/installer-safety.sh` | Data-safety guards on everything the installer writes to user files — rc rewrites, `settings.json`, dependency checks. Drives **both** installers, so a shared-protocol fix applied to only one repo fails here. |
 | `tests/wrapper-atomic-install.sh` | Asserts *how* the installer writes files: the wrapper is replaced atomically, never overwritten in place under a running session. |
 | `tests/session-title-smoke.sh` | One model call checking that the Claude Code binary still honours a hook's `sessionTitle`. It registers its own throwaway hook, so a failure means the binary changed, not this repo. |

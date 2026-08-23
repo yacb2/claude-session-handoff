@@ -31,12 +31,26 @@
 #   OPEN RULE <a standing constraint of theirs>
 #   CLOSE d1 <how it was settled>
 #   TURN <a course correction this session took>
+#   NOTE <a mechanical pointer, written by a hook and never by a model>
 #
 # TURN is the one that is not an obligation. It records that the work CHANGED
 # direction — an approach abandoned because something else worked better, a
 # problem found mid-execution, a decision taken on the fly. It never appears in
 # the open list and nothing closes it; it is history, and it renders in a
 # bounded trajectory below the open items.
+#
+# NOTE is TURN's model-free twin and exists because of one asymmetry. The bare
+# `handoff` paths run with no model in the loop, so nobody writes a delta and
+# the link leaves no trace at all — the trajectory then reads as if the chain
+# skipped from link 4 to link 7. NOTE lets the prompt hook drop a pointer saying
+# the link ended that way and where its closing reply is.
+#
+# It is deliberately NOT a TURN, and the difference is not cosmetic. The STALE
+# line below measures how many links have passed with nobody CONFIRMING what the
+# ledger holds; a hook-written pointer confirms nothing. Counting it would pin
+# `lastwrite` to the latest link on every bare handoff and silence the staleness
+# warning permanently — the entry announcing that no model was involved would be
+# the very thing hiding it.
 #
 # Correcting an earlier item is expressed the same way, without rewriting
 # anything: CLOSE it with what actually turned out, and OPEN the corrected one.
@@ -125,6 +139,12 @@ ledger_apply() {
         _out="${_out}${_at}	${_n}	TURN	-	-	${_text}
 "
         ;;
+      NOTE)
+        _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f2-)")
+        [ -n "$_text" ] || continue
+        _out="${_out}${_at}	${_n}	NOTE	-	-	${_text}
+"
+        ;;
       CLOSE)
         _id=$(printf '%s' "$_line" | awk '{print $2}')
         case "$_id" in
@@ -158,11 +178,12 @@ ledger_render() {
   [ -s "$_ledger" ] || return 0
 
   _body=$(awk -F'\t' -v now="$_n" -v cap="$LEDGER_MAX_ITEMS" -v trail="$LEDGER_TRAIL_LINKS" '
-    { if ($2+0 > lastwrite) lastwrite=$2+0 }
+    $3!="NOTE" { if ($2+0 > lastwrite) lastwrite=$2+0 }
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
     $3=="CLOSE"   { closed[$4]=1; e++; ev[e]=sprintf("link %s  closed %s — %s", $2, $4, $6); evn[e]=$2+0; evt[e]=$4 " " $6; next }
     $3=="TURN"    { e++; ev[e]=sprintf("link %s  turn — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
+    $3=="NOTE"    { e++; ev[e]=sprintf("link %s  note — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
     END {
       if (charter != "") printf "CHARTER (set at link %s): %s\n\n", charter_n, charter
       n=0
@@ -215,8 +236,15 @@ ledger_render() {
       # seeds the transcript tail with no model in the loop, so it carries this
       # list forward and updates none of it. Without this line a ledger frozen
       # three links ago reads exactly like one confirmed this link.
+      # lastwrite stays 0 on a ledger built entirely out of NOTE entries — a
+      # chain every link of which ended model-free. That is not "stale since
+      # link 0", it is a chain no session has ever confirmed, and saying so is
+      # the honest form.
       idle = (now - 1) - lastwrite
-      if (idle >= 1) printf "\nSTALE: %d link(s) have passed with no delta written — nothing here has been\nreconfirmed or closed since link %s. Re-check before repeating any of it as current.\n", idle, lastwrite
+      if (lastwrite < 1) {
+        if (e > 0) printf "\nSTALE: no session has ever written a delta on this chain — every link so far\nended by a model-free path. Nothing below has been confirmed by a session.\n"
+      }
+      else if (idle >= 1) printf "\nSTALE: %d link(s) have passed with no delta written — nothing here has been\nreconfirmed or closed since link %s. Re-check before repeating any of it as current.\n", idle, lastwrite
     }
   ' "$_ledger" 2>/dev/null) || return 0
 
