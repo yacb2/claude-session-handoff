@@ -492,6 +492,8 @@ install() {
 
   atomic_install "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-ledger.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-retro-filter.py" "$SCRIPTS_DIR/handoff-retro-filter.py" 755
   info "Handoff hook scripts installed"
 
   atomic_install "$SCRIPT_DIR/commands/handoff.md" "$COMMANDS_DIR/handoff.md"
@@ -536,7 +538,8 @@ uninstall() {
   echo "  Uninstalling claude-session-handoff..."
   echo ""
 
-  rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh"
+  rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" \
+    "$SCRIPTS_DIR/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-retro-filter.py"
   info "Handoff hook scripts removed"
 
   rm -f "$COMMANDS_DIR/handoff.md"
@@ -545,7 +548,8 @@ uninstall() {
   rm -rf "$SKILLS_DIR/session-handoff"
   info "Skill removed"
 
-  rm -f "$TMP_DIR"/handoff-flag-* "$TMP_DIR"/handoff-payload-* "$TMP_DIR"/handoff-title-*
+  rm -f "$TMP_DIR"/handoff-flag-* "$TMP_DIR"/handoff-payload-* "$TMP_DIR"/handoff-title-* \
+    "$TMP_DIR"/handoff-ledger-* "$TMP_DIR"/handoff-retro-*
   info "Temp files cleaned"
 
   # ~/.claude/handoff-chains/ is deliberately NOT removed. It is not install
