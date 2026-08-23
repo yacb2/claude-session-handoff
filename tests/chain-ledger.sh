@@ -449,10 +449,15 @@ retro_box
 link R1 'chain r' ''
 fake_transcript R1
 link R2 'chain r' '' 'NOTE link ended model-free — bare handoff.'
+# Absolute script paths, not relative. `dirname "$0"` is relative whenever the
+# hook was invoked by a relative path, and these commands are run by a session
+# whose working directory is the project — where a relative path resolves
+# against the wrong tree and the instruction fails on its first line.
 if printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO' \
-  && printf '%s' "$CTX" | grep -q 'handoff-retro-filter.py' \
+  && printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-retro-filter.py'" \
+  && printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-ledger.sh' apply" \
   && printf '%s' "$CTX" | grep -q "$SANDBOX/.claude/projects/-w-proj-under-test/R1.jsonl"; then
-  ok "R: no model delta last link, predecessor transcript on disk -> the retro block is emitted"
+  ok "R: the retro block is emitted, with absolute script paths and the right transcript"
 else
   no "R: the retro block was missing or pointed at the wrong transcript"
   printf '%s\n' "$CTX" | tail -20 | sed 's/^/     /'
@@ -556,6 +561,38 @@ if command -v python3 >/dev/null 2>&1; then
   rm -rf "$FBOX"
 else
   no "D: python3 not in PATH — the filter could not be exercised"
+fi
+
+# --- Case R6: the emitted commands must be absolute ------------------------
+#
+# Every other case invokes the hook by an absolute path, so `dirname "$0"` is
+# already absolute and the defect is invisible — the first version of this
+# assertion passed against a broken build for exactly that reason. Here the
+# hook is invoked the other way, which is the only way to see it. The commands
+# are run by a session whose working directory is the PROJECT, so a relative
+# script path resolves against the wrong tree and the instruction fails on its
+# first line.
+retro_box
+mkdir -p "$SANDBOX/.claude/projects/-w-proj-under-test"
+printf '%s\n' \
+  '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"prev"}]}}' \
+  > "$SANDBOX/.claude/projects/-w-proj-under-test/Z1.jsonl"
+rel_link() {
+  printf 'slug: chain z\n\n## Current goal\n\nx\n' \
+    > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+  OUT=$(cd "$REPO" && printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+    "$1" "$CWD" | HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" sh scripts/handoff-session-start.sh 2>/dev/null)
+  CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+}
+rel_link Z1
+rel_link Z2
+if printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-retro-filter.py'" \
+  && printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-ledger.sh' apply" \
+  && ! printf '%s' "$CTX" | grep -q "'scripts/handoff-"; then
+  ok "R6: invoked by a relative path, the hook still emits absolute script paths"
+else
+  no "R6: the retro block emitted a relative script path"
+  printf '%s' "$CTX" | grep -E "scripts/handoff-" | sed 's/^/     /'
 fi
 
 # --- Case R5: an empty predecessor id must not glob the world --------------
