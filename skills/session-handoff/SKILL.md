@@ -114,6 +114,99 @@ and it is more stable than any phrasing produced per hop.
 One line, and no ordinal of your own — the ordinal comes from the record, and a hand-written one
 would be counted twice.
 
+### The chain ledger — what the brief must stop carrying
+
+A session in an established chain opens with a `=== CHAIN LEDGER ===` block above the brief.
+It is not something a previous session re-typed: it is a per-chain file the `SessionStart` hook
+renders with no model involved, and an item leaves it **only when a `CLOSE` delta closes it**.
+
+That block exists because the brief cannot hold these things. The brief is re-drafted from
+scratch at every hop, so it carries what the outgoing session happened to touch. Measured over
+21 real links on 2026-08-22: a fact survives one hop 33% of the time, and the decay does not
+care whether the fact was allowed to expire — items owed to the user survived **17%**, the worst
+class of all. In one seven-link chain the "Owed by the owner" block travelled links 1 to 4 and
+then vanished at link 5, unclosed and undecided; two links later nothing referenced it. And 6 of
+those 21 links carried no drafted brief at all, because bare `handoff` seeds the transcript tail
+with no model in the loop — so no rule written here can reach them. The ledger can, which is the
+whole reason it is a file and not a better instruction.
+
+**Do not re-type ledger items into the brief.** They are already carried, and copying them back
+is how the two records start disagreeing. The brief keeps what it is good at: the volatile
+state, re-verified each hop.
+
+Three kinds of thing go in, and nothing else:
+
+| Delta line | For |
+|---|---|
+| `CHARTER <text>` | What this chain exists to do. Written once, at the chain's first handoff. |
+| `OPEN OWED <text>` | A decision only the user can make. **This is where a recorded fork goes** — the `Next concrete step` fork survives one hop; an `OWED` item survives until answered. |
+| `OPEN RULE <text>` | A standing constraint of theirs — "do not merge or push this branch". |
+| `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
+| `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. **Name the item id when a turn bears on one** — `TURN d1 turned out to depend on X` — because that is what carries the entry forward once it falls outside the trajectory window. |
+
+There is a fifth verb, `NOTE`, and it is **not yours to write**. The hooks use it for the
+model-free paths — one pointer saying the link ended via bare `handoff` and where its
+closing reply is. It renders in the trajectory alongside `TURN` and it deliberately does
+**not** count as a confirmation: the staleness warning measures links since anything
+*confirmed* what the ledger holds, and neither a hook pointer nor a retro recovery is
+that. Nothing rejects a `NOTE` you write — it is simply counted nowhere, so using one in
+place of a `TURN` makes that link's work invisible in the number the automation decision
+is pinned to. Write `TURN`.
+
+### The predecessor retro — the links no session could write for
+
+The write path had one hole and it was the same hole twice. Deltas are written by the
+**dying** session, which needs its context live: after an hour away with a cold cache that
+means re-sending the whole conversation to the largest model just to ask what changed. And
+on the bare `handoff` paths no model runs at all — 6 of the 21 measured links.
+
+The fix is a sequence, not a rule. The handoff jumps **first** (free, no model), and the
+**arriving** session — empty context, warm cache by construction — reads its predecessor's
+transcript off disk and writes that link's deltas before it does anything else. The
+objection that the ledger then lags a link dissolves in that order: the retro runs before
+the new session works, so the items land at the same wall-clock moment they otherwise
+would have, written by a session that did not have to pay for them.
+
+When it applies, the `SessionStart` hook injects a `=== PREDECESSOR RETRO ===` block with
+the exact commands. It appears **only** where no model wrote deltas for the previous link;
+where one did, its account is already in hand and a second pass would be a worse copy of it.
+Two things about it are worth knowing before you follow it:
+
+- **Delegate it.** The digest is built by `handoff-retro-filter.py` — mechanical, no model,
+  measured 2.8 MB → 56 KB on a real link and 260 MB → 199 KB in 0.4s on the largest
+  transcript to hand. Then **one subagent on a small model** reads that digest. The whole
+  saving is that you never read the transcript yourself.
+- **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
+  the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
+  a real open item permanently — the single thing this mechanism promises cannot happen by
+  accident. `TURN` and `OPEN` only. Three guards, because prose is not a control over the
+  record it writes into: the filter cuts the ledger block out of the digest, the instruction
+  forbids the verb, and `apply` **refuses** a `CLOSE` at `retro` provenance outright.
+- **Run its commands exactly as emitted, at column 0.** Step 3 is a quoted heredoc, so an
+  indented terminator does not terminate it: the shell swallows the two commands after it
+  into the file, nothing is recorded, and the digest is left on disk. Do not indent the
+  delta lines either.
+
+**Correcting something an earlier link got wrong needs no rewrite, and must not get
+one.** The file is append-only. `CLOSE` the item with what actually turned out, then
+`OPEN` the corrected one: both lines stay, in order, with the link each happened at.
+That is the trajectory an arriving session reads to learn where the chain has *been*,
+not only where it stands — and rewriting history would destroy exactly that.
+
+**Promotion — how an item leaves for good.** An item that turns out to deserve
+permanence does not stay here. Write it as an ADR, a backlog item or a plan, then
+`CLOSE` it naming that reference. The ledger is the *pre-artifact* layer: what is owed
+inside this chain and not yet worth a document. Skipping this is how it silently
+becomes a second backlog that nothing reindexes and no one archives.
+
+Ids are assigned by the mechanism, never written by you — you can only reference an id the block
+already showed you. Volatile state, commit SHAs, gate results and next steps do **not** go in;
+they belong in the brief, where re-verifying them each hop is correct.
+
+**Every handoff writes its deltas.** Nothing changed is a legitimate answer and means writing
+none — but a session that settled an owed item and did not close it leaves the next six links
+reading a question the user already answered.
+
 Drafting rules:
 - Be terse. Skip any section that adds nothing — **except `Next concrete step`**, which is never
   skipped.
@@ -138,6 +231,12 @@ and a large batch unpublished — a genuine fork. The brief did not record it, s
 inferred it from an intentless first message and opened with *"'Continue' can mean two very
 different things here"*. Same fork, but blamed on the user's word instead of read off the state.
 Recorded, it opens as *"the next step is your call: A or B"* — the handoff working, not failing.
+
+**A recorded fork belongs in the ledger, not only in the brief.** `Next concrete step` is
+re-drafted at the next hop and the fork survives exactly as long as some session happens
+to re-type it — measured at 17% per hop, the worst-surviving class there is. `OPEN OWED`
+survives until you answer it. Write it in both if the next step really is the fork; write
+it in the ledger regardless.
 
 Watch the quieter route to the same place: instead of skipping the section, the fork gets demoted
 into `Constraints / gotchas` as a prohibition — *"do not push without an explicit ask"* — while
@@ -216,6 +315,16 @@ mkdir -p "$HOME/.claude/tmp"
 # The payload is conversation content. Claude Code stores transcripts 0600; the
 # default umask would write this 0644, i.e. more readable than its source.
 umask 077
+
+# Ledger deltas. Same drop-a-file pattern as the payload, and for the same
+# reason: this session knows neither its own id nor its chain, so it cannot key
+# a ledger. The SessionStart hook — the one place chain identity exists — applies
+# these. OMIT this whole cat when nothing changed; an empty delta is a no-op but
+# a fabricated one is a lie that outlives the session.
+DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
+cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
+<ONE DELTA PER LINE — OPEN / CLOSE / TURN / CHARTER — OR OMIT THIS BLOCK ENTIRELY>
+__HANDOFF_DELTA_EOF__
 
 PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"

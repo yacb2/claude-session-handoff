@@ -283,6 +283,54 @@ else
   rm -f "$PAYLOAD_FILE"
 fi
 
+# --- the mechanical ledger line ----------------------------------------------
+#
+# Both paths above bypass the model, which is what makes them free and is also
+# why the chain ledger hears nothing from them: deltas are written by a model at
+# handoff time, and here there is none. The link then leaves no trace at all —
+# the trajectory reads as if the chain skipped from link 4 to link 7, and no
+# later reader can tell a link that decided nothing from one that was never
+# recorded.
+#
+# One line fixes that, and it is a POINTER, not a summary. A summary needs a
+# model and this path exists to avoid one; what a hook can honestly say is that
+# the link ended this way and where its closing reply is. Anything richer is
+# recovered by the retro the SessionStart hook asks the next session to run, and
+# that is the right layer for it.
+#
+# `NOTE`, never `TURN`, and in a file of its own rather than appended to the
+# model's delta file. Two separate reasons, both of which would ship green and
+# silently break the mechanism:
+#
+#   - The SessionStart hook routes the retro on whether a model wrote deltas,
+#     and the delta file IS that predicate. A hook-written line in it would make
+#     the file present on exactly the links the retro exists for, so the retro
+#     would never run on any of them.
+#   - The renderer's STALE line counts links since anything CONFIRMED the
+#     ledger. A hook pointer confirms nothing, and counting it would pin the
+#     counter forward on every bare handoff — the entry whose whole content is
+#     "no model was involved" would be the thing hiding that no model has been
+#     involved for six links.
+#
+# `--clean` writes nothing: it starts a new chain by definition, so there is no
+# ledger for the line to land in.
+MECH_FILE="${HANDOFF_DIR}/handoff-ledger-mech-${CLAUDE_HANDOFF_ID}"
+rm -f "$MECH_FILE"
+if [ "$PAYLOAD" != "--clean" ]; then
+  if [ -n "$PAYLOAD" ]; then
+    MECH_HOW="the owner typed the brief himself (\`handoff: <text>\`)"
+  else
+    MECH_HOW="bare \`handoff\` seeded this link's closing reply verbatim"
+  fi
+  if [ -n "$TRANSCRIPT" ]; then
+    MECH_WHERE="; its transcript: $TRANSCRIPT"
+  else
+    MECH_WHERE=""
+  fi
+  printf 'NOTE link ended model-free — %s, so no session wrote deltas for it%s\n' \
+    "$MECH_HOW" "$MECH_WHERE" > "$MECH_FILE"
+fi
+
 # --- chain lineage (ADR 2026-08-19-handoff-chain-lineage) --------------------
 #
 # The outgoing half. This session writes what only it knows — what the chain is
