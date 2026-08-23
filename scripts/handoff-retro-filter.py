@@ -52,6 +52,14 @@ COMMAND_ENVELOPE = re.compile(
 LEDGER_BLOCK = re.compile(
     r"=== CHAIN LEDGER ===.*?=== END CHAIN LEDGER ===", re.S)
 
+# The retro's own instruction block, for the same reason plus one. A link that
+# ran a retro closes by saying in one line what it recovered, and that sentence
+# is assistant prose — so it survives into the NEXT link's digest, where a
+# subagent can re-emit the same finding as a fresh OPEN under a new id. The
+# block itself is worse: it names ids and tells its reader what to write.
+RETRO_BLOCK = re.compile(
+    r"=== PREDECESSOR RETRO.*?=== END PREDECESSOR RETRO ===", re.S)
+
 ELISION = "\n[... middle of the session elided to fit the digest budget ...]\n"
 
 
@@ -59,6 +67,7 @@ def clean(text):
     if not text:
         return ""
     text = LEDGER_BLOCK.sub("", text)
+    text = RETRO_BLOCK.sub("", text)
     text = SYSTEM_REMINDER.sub("", text)
     text = COMMAND_ENVELOPE.sub("", text)
     # Collapse runs of blank lines left behind by the cuts above.
@@ -148,14 +157,39 @@ def render(entries, max_bytes):
             break
         head.append(c)
         head_n += n
+    # `continue`, not `break`. Breaking on the first turn that does not fit
+    # threw away everything older than it — and the turn that triggers it is
+    # most often the LAST one, because a session's final act is routinely
+    # pasting a document or a large file. One oversized turn at the end took the
+    # whole recent tail with it: the five decisions before it, gone, on the
+    # exact links a retro is for. Skipping it keeps them.
     tail, tail_n = [], 0
     for c in reversed(chunks[len(head):]):
         n = len(c.encode("utf-8")) + 2
         if tail_n + n > max_bytes - head_n:
-            break
+            continue
         tail.append(c)
         tail_n += n
     tail.reverse()
+
+    # One turn larger than the whole budget, and nothing else: both ends come
+    # back empty and the digest is the elision notice alone — 73 bytes saying
+    # nothing was kept. It exits 0, so the caller emits the retro block and a
+    # subagent is spent on an empty file, which is the outcome the gate exists
+    # to prevent. Keep the END of that turn instead: it is the most recent
+    # thing said, and something is what the retro was promised.
+    if not head and not tail:
+        keep = max_bytes - len(ELISION) - 2
+        raw = chunks[-1].encode("utf-8")[-keep:] if keep > 0 else b""
+        body = raw.decode("utf-8", "replace")
+        if not body.strip():
+            return ""
+        return ELISION.replace(
+            "middle of the session elided",
+            "start of a single oversized turn elided; %d turns before it dropped"
+            % (len(chunks) - 1)
+        ) + body
+
     dropped = len(chunks) - len(head) - len(tail)
     return "\n\n".join(head) + ELISION.replace(
         "middle of the session elided",

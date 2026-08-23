@@ -147,8 +147,11 @@ Three kinds of thing go in, and nothing else:
 There is a fifth verb, `NOTE`, and it is **not yours to write**. The hooks use it for the
 model-free paths — one pointer saying the link ended via bare `handoff` and where its
 closing reply is. It renders in the trajectory alongside `TURN` and it deliberately does
-**not** count as a confirmation: the staleness warning measures links since a *session*
-last wrote a delta, and a hook pointer is not that.
+**not** count as a confirmation: the staleness warning measures links since anything
+*confirmed* what the ledger holds, and neither a hook pointer nor a retro recovery is
+that. Nothing rejects a `NOTE` you write — it is simply counted nowhere, so using one in
+place of a `TURN` makes that link's work invisible in the number the automation decision
+is pinned to. Write `TURN`.
 
 ### The predecessor retro — the links no session could write for
 
@@ -176,8 +179,13 @@ Two things about it are worth knowing before you follow it:
 - **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
   the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
   a real open item permanently — the single thing this mechanism promises cannot happen by
-  accident. `TURN` and `OPEN` only. The filter also cuts the ledger block out of the digest,
-  because one guard on a property this load-bearing is not enough.
+  accident. `TURN` and `OPEN` only. Three guards, because prose is not a control over the
+  record it writes into: the filter cuts the ledger block out of the digest, the instruction
+  forbids the verb, and `apply` **refuses** a `CLOSE` at `retro` provenance outright.
+- **Run its commands exactly as emitted, at column 0.** Step 3 is a quoted heredoc, so an
+  indented terminator does not terminate it: the shell swallows the two commands after it
+  into the file, nothing is recorded, and the digest is left on disk. Do not indent the
+  delta lines either.
 
 **Correcting something an earlier link got wrong needs no rewrite, and must not get
 one.** The file is append-only. `CLOSE` the item with what actually turned out, then

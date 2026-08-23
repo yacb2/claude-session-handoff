@@ -57,7 +57,11 @@
 #
 # It is deliberately NOT a TURN, and the difference is not cosmetic. The STALE
 # line below measures how many links have passed with nobody CONFIRMING what the
-# ledger holds; a hook-written pointer confirms nothing. Counting it would pin
+# ledger holds; a hook-written pointer confirms nothing. A retro-sourced entry
+# does not confirm either, and for a stronger reason: the retro fires on exactly
+# the model-free links, unconditionally, and it is forbidden to write CLOSE — so
+# it can never establish that an open item still stands. Both are excluded from
+# `lastwrite`, and only those two. Counting it would pin
 # `lastwrite` to the latest link on every bare handoff and silence the staleness
 # warning permanently — the entry announcing that no model was involved would be
 # the very thing hiding it.
@@ -127,6 +131,13 @@ ledger_apply() {
   _at=$(now_iso)
   _out=""
   while IFS= read -r _line || [ -n "$_line" ]; do
+    # Strip leading whitespace before anything reads the line. `awk '{print $1}'`
+    # tolerates it and `cut -d' ' -f3-` does not, so an indented delta parsed as
+    # a valid verb and then carried that verb INTO its own text — permanently,
+    # in an append-only record: `d1 OWED [opened at link 3]   OPEN OWED decide
+    # the release date`. Indented delta lines are not a hypothetical; the block
+    # that asks a model to write them shows them indented for readability.
+    _line=${_line#"${_line%%[![:space:]]*}"}
     _verb=$(printf '%s' "$_line" | awk '{print $1}')
     case "$_verb" in
       CHARTER)
@@ -160,6 +171,14 @@ ledger_apply() {
 "
         ;;
       CLOSE)
+        # The one irreversible operation here, and the only guard on it was
+        # prose in an instruction block. A retro reads a TRANSCRIPT, and a
+        # transcript quotes the predecessor's own rendered ledger with live ids
+        # in it; one echoed id retires a real obligation for good. The source is
+        # already threaded to this function, so the guard belongs here — an
+        # instruction a model is asked to obey is not a control over the record
+        # it writes into.
+        [ "$_src" = "retro" ] && continue
         _id=$(printf '%s' "$_line" | awk '{print $2}')
         case "$_id" in
           d[0-9]*) ;;
@@ -192,7 +211,7 @@ ledger_render() {
   [ -s "$_ledger" ] || return 0
 
   _body=$(awk -F'\t' -v now="$_n" -v cap="$LEDGER_MAX_ITEMS" -v trail="$LEDGER_TRAIL_LINKS" '
-    $3!="NOTE" { if ($2+0 > lastwrite) lastwrite=$2+0 }
+    $3!="NOTE" && $7!="retro" { if ($2+0 > lastwrite) lastwrite=$2+0 }
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
     $3=="CLOSE"   { closed[$4]=1; e++; ev[e]=sprintf("link %s  closed %s — %s", $2, $4, $6); evn[e]=$2+0; evt[e]=$4 " " $6; next }
@@ -232,7 +251,12 @@ ledger_render() {
           # relevance filter that picks wrong is worse than none, because the
           # reader cannot tell a quiet miss from "nothing older mattered".
           keep=0
-          for (id in openset) if (index(evt[i], id) > 0) keep=1
+          # A whole-token match. `index()` made this a substring test, so an
+          # entry reading `closed d12 - ...` was pulled forward as bearing on
+          # `d1` — contradicting the "no keyword guessing" the comment above
+          # promises, in the one place the window is allowed an exception.
+          for (id in openset)
+            if (match(evt[i], "(^|[^0-9A-Za-z])" id "([^0-9]|$)")) keep=1
           if (keep) { printf "  %s   <- still bears on an open item\n", ev[i]; shown++; continue }
           held++
           if (oldest_held == 0 || evn[i] < oldest_held) oldest_held = evn[i]
