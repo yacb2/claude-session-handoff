@@ -142,7 +142,7 @@ Three kinds of thing go in, and nothing else:
 | `OPEN OWED <text>` | A decision only the user can make. **This is where a recorded fork goes** — the `Next concrete step` fork survives one hop; an `OWED` item survives until answered. |
 | `OPEN RULE <text>` | A standing constraint of theirs — "do not merge or push this branch". |
 | `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
-| `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. |
+| `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. **Name the item id when a turn bears on one** — `TURN d1 turned out to depend on X` — because that is what carries the entry forward once it falls outside the trajectory window. |
 
 **Correcting something an earlier link got wrong needs no rewrite, and must not get
 one.** The file is append-only. `CLOSE` the item with what actually turned out, then

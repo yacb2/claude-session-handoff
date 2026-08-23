@@ -320,5 +320,58 @@ else
   printf '%s\n' "$CTX" | grep -i stale | sed 's/^/     /'
 fi
 
+# --- Case M: the trajectory window is links, not a line count ---------------
+#
+# A fixed count cuts a long chain at an arbitrary line and over-serves a short
+# one. Three LINKS shows a short chain whole and a phased plan its recent phases
+# complete — the unit the reader thinks in. What falls outside is counted and
+# its link range named, so the chain never looks shorter than it is.
+box
+link M0 'chain m' ''
+link M1 'chain m' 'OPEN RULE do not push.
+TURN the very first turn, far in the past.'
+link M2 'chain m' 'TURN second turn.'
+link M3 'chain m' 'TURN third turn.'
+link M4 'chain m' 'TURN fourth turn.'
+link M5 'chain m' 'TURN fifth turn.'
+link M6 'chain m' ''
+if printf '%s' "$CTX" | grep -q 'fifth turn' && printf '%s' "$CTX" | grep -q 'fourth turn' \
+  && ! printf '%s' "$CTX" | grep -q 'the very first turn'; then
+  ok "M: the window keeps recent links and drops older ones"
+else
+  no "M: wrong entries inside the window"
+  printf '%s\n' "$CTX" | sed -n '/HOW THIS/,/^$/p' | sed 's/^/     /'
+fi
+if printf '%s' "$CTX" | grep -qE 'more entr(y|ies) from links? [0-9]'; then
+  ok "M2: what fell outside is counted and its links named, not silently dropped"
+else
+  no "M2: older entries vanished with no trace that the chain is longer"
+fi
+
+# --- Case N2: an old entry that names a live item is carried up -------------
+#
+# The one exception to the window, and exactly one on purpose. An entry naming
+# an item that is STILL OPEN is provably about something live, however old. It
+# is an id match, not a keyword guess: a fuzzy relevance filter that picks wrong
+# is worse than none, because the reader cannot tell a quiet miss from "nothing
+# older mattered".
+box
+link N0 'chain n' ''
+link N1 'chain n' 'OPEN OWED whether to automate the trigger.
+TURN d1 turned out to depend on the write-side rate, which nothing measures yet.
+TURN an unrelated old decision about file layout.'
+link N2 'chain n' ''
+link N3 'chain n' ''
+link N4 'chain n' ''
+link N5 'chain n' ''
+if printf '%s' "$CTX" | grep -q 'still bears on an open item' \
+  && printf '%s' "$CTX" | grep -q 'depend on the write-side rate' \
+  && ! printf '%s' "$CTX" | grep -q 'unrelated old decision'; then
+  ok "N2: an old entry naming a live item is carried up; its neighbours are not"
+else
+  no "N2: the carry-up matched the wrong entries (or none)"
+  printf '%s\n' "$CTX" | sed -n '/HOW THIS/,/^$/p' | sed 's/^/     /'
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
