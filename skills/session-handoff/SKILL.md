@@ -144,6 +144,41 @@ Three kinds of thing go in, and nothing else:
 | `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
 | `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. **Name the item id when a turn bears on one** — `TURN d1 turned out to depend on X` — because that is what carries the entry forward once it falls outside the trajectory window. |
 
+There is a fifth verb, `NOTE`, and it is **not yours to write**. The hooks use it for the
+model-free paths — one pointer saying the link ended via bare `handoff` and where its
+closing reply is. It renders in the trajectory alongside `TURN` and it deliberately does
+**not** count as a confirmation: the staleness warning measures links since a *session*
+last wrote a delta, and a hook pointer is not that.
+
+### The predecessor retro — the links no session could write for
+
+The write path had one hole and it was the same hole twice. Deltas are written by the
+**dying** session, which needs its context live: after an hour away with a cold cache that
+means re-sending the whole conversation to the largest model just to ask what changed. And
+on the bare `handoff` paths no model runs at all — 6 of the 21 measured links.
+
+The fix is a sequence, not a rule. The handoff jumps **first** (free, no model), and the
+**arriving** session — empty context, warm cache by construction — reads its predecessor's
+transcript off disk and writes that link's deltas before it does anything else. The
+objection that the ledger then lags a link dissolves in that order: the retro runs before
+the new session works, so the items land at the same wall-clock moment they otherwise
+would have, written by a session that did not have to pay for them.
+
+When it applies, the `SessionStart` hook injects a `=== PREDECESSOR RETRO ===` block with
+the exact commands. It appears **only** where no model wrote deltas for the previous link;
+where one did, its account is already in hand and a second pass would be a worse copy of it.
+Two things about it are worth knowing before you follow it:
+
+- **Delegate it.** The digest is built by `handoff-retro-filter.py` — mechanical, no model,
+  measured 2.8 MB → 56 KB on a real link and 260 MB → 199 KB in 0.4s on the largest
+  transcript to hand. Then **one subagent on a small model** reads that digest. The whole
+  saving is that you never read the transcript yourself.
+- **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
+  the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
+  a real open item permanently — the single thing this mechanism promises cannot happen by
+  accident. `TURN` and `OPEN` only. The filter also cuts the ledger block out of the digest,
+  because one guard on a property this load-bearing is not enough.
+
 **Correcting something an earlier link got wrong needs no rewrite, and must not get
 one.** The file is append-only. `CLOSE` the item with what actually turned out, then
 `OPEN` the corrected one: both lines stay, in order, with the link each happened at.
