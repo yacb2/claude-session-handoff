@@ -16,12 +16,22 @@
 #
 # Two subcommands, both used by handoff-session-start.sh:
 #
-#   apply  <ledger> <delta-file> <n>   append the outgoing session's deltas
-#   render <ledger> <n>                print the block to inject, or nothing
+#   apply  <ledger> <delta-file> <n> [src]   append a link's deltas
+#   render <ledger> <n>                      print the block to inject, or nothing
 #
 # Storage is one tab-separated event per line:
 #
-#   <iso8601>\t<link>\t<verb>\t<id>\t<type>\t<text>
+#   <iso8601>\t<link>\t<verb>\t<id>\t<type>\t<text>\t<source>
+#
+# `source` is `session` when a live session wrote the deltas at its own handoff,
+# and `retro` when a successor recovered them from the transcript afterwards.
+# Both are real records of the link and both render the same; the field exists
+# because ledger-readout.sh measures how often a SESSION writes, and that number
+# is what the decision to automate the trigger is pinned to. Absorbing recovered
+# writes into it would drive the rate toward 100% by construction — the same
+# defect the NOTE separation exists to prevent, one layer up. Lines written
+# before this field existed have an empty $7 and read as `session`, which is
+# what they were.
 #
 # Deltas are written by the model in the outgoing session (SKILL.md Step 2) in
 # a deliberately forgiving line syntax:
@@ -97,7 +107,11 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # --- apply -------------------------------------------------------------------
 
 ledger_apply() {
-  _ledger="$1"; _delta="$2"; _n="$3"
+  _ledger="$1"; _delta="$2"; _n="$3"; _src="${4:-session}"
+  case "$_src" in
+    session|retro) ;;
+    *) _src="session" ;;
+  esac
   [ -f "$_delta" ] || return 0
 
   # Ids continue from the highest one the ledger already carries, so a CLOSE
@@ -118,7 +132,7 @@ ledger_apply() {
       CHARTER)
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f2-)")
         [ -n "$_text" ] || continue
-        _out="${_out}${_at}	${_n}	CHARTER	-	-	${_text}
+        _out="${_out}${_at}	${_n}	CHARTER	-	-	${_text}	${_src}
 "
         ;;
       OPEN)
@@ -129,20 +143,20 @@ ledger_apply() {
         esac
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f3-)")
         [ -n "$_text" ] || continue
-        _out="${_out}${_at}	${_n}	OPEN	d${_next}	${_type}	${_text}
+        _out="${_out}${_at}	${_n}	OPEN	d${_next}	${_type}	${_text}	${_src}
 "
         _next=$((_next + 1))
         ;;
       TURN)
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f2-)")
         [ -n "$_text" ] || continue
-        _out="${_out}${_at}	${_n}	TURN	-	-	${_text}
+        _out="${_out}${_at}	${_n}	TURN	-	-	${_text}	${_src}
 "
         ;;
       NOTE)
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f2-)")
         [ -n "$_text" ] || continue
-        _out="${_out}${_at}	${_n}	NOTE	-	-	${_text}
+        _out="${_out}${_at}	${_n}	NOTE	-	-	${_text}	${_src}
 "
         ;;
       CLOSE)
@@ -153,7 +167,7 @@ ledger_apply() {
         esac
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f3-)")
         [ -n "$_text" ] || _text="closed"
-        _out="${_out}${_at}	${_n}	CLOSE	${_id}	-	${_text}
+        _out="${_out}${_at}	${_n}	CLOSE	${_id}	-	${_text}	${_src}
 "
         ;;
       *) continue ;;
@@ -182,7 +196,7 @@ ledger_render() {
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
     $3=="CLOSE"   { closed[$4]=1; e++; ev[e]=sprintf("link %s  closed %s — %s", $2, $4, $6); evn[e]=$2+0; evt[e]=$4 " " $6; next }
-    $3=="TURN"    { e++; ev[e]=sprintf("link %s  turn — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
+    $3=="TURN"    { e++; ev[e]=sprintf("link %s  turn%s — %s", $2, ($7=="retro" ? " (recovered)" : ""), $6); evn[e]=$2+0; evt[e]=$6; next }
     $3=="NOTE"    { e++; ev[e]=sprintf("link %s  note — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
     END {
       if (charter != "") printf "CHARTER (set at link %s): %s\n\n", charter_n, charter
@@ -265,7 +279,7 @@ ledger_render() {
 }
 
 case "${1:-}" in
-  apply)  shift; ledger_apply  "${1:-}" "${2:-}" "${3:-1}" ;;
+  apply)  shift; ledger_apply  "${1:-}" "${2:-}" "${3:-1}" "${4:-session}" ;;
   render) shift; ledger_render "${1:-}" "${2:-1}" ;;
-  *) echo "usage: handoff-ledger.sh {apply <ledger> <delta> <n> | render <ledger> <n>}" >&2; exit 2 ;;
+  *) echo "usage: handoff-ledger.sh {apply <ledger> <delta> <n> [session|retro] | render <ledger> <n>}" >&2; exit 2 ;;
 esac
