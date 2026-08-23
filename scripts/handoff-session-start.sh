@@ -184,6 +184,19 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
      + (if $clean == "" then {} else {clean: true} end)' 2>/dev/null)
 fi
 
+# `dirname "$0"` is relative when the hook was invoked by a relative path, and
+# a path emitted into an instruction is resolved by somebody else, somewhere
+# else. Falls back to the input unchanged rather than failing: an absolute path
+# is better, a relative one is what we already had.
+abspath() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *)  _ad=$(CDPATH= cd -- "$(dirname -- "$1")" 2>/dev/null && pwd) || {
+          printf '%s' "$1"; return 0; }
+        printf '%s/%s' "$_ad" "$(basename -- "$1")" ;;
+  esac
+}
+
 # --- chain ledger ------------------------------------------------------------
 #
 # The brief is re-drafted from scratch every hop, so it carries only what the
@@ -310,6 +323,13 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
       fi
     done
     if [ -n "$RETRO_TRANSCRIPT" ]; then
+      # Absolute, always. Both script paths come off `dirname "$0"`, which is
+      # relative whenever the hook itself was invoked by a relative path — and
+      # the commands below are run by a session whose working directory is the
+      # PROJECT, not ~/.claude/scripts. A relative path there resolves against
+      # the wrong tree and the instruction fails on its first line.
+      RETRO_FILTER=$(abspath "$RETRO_FILTER")
+      RETRO_LEDGER_SH=$(abspath "$LEDGER_SH")
       RETRO_DIGEST="${HOME}/.claude/tmp/handoff-retro-digest-${PREV}"
       RETRO_DELTA="${HOME}/.claude/tmp/handoff-retro-delta-${PREV}"
       RETRO_BLOCK=$(printf '%s\n' \
@@ -345,11 +365,11 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
 "     cat > '$RETRO_DELTA' <<'EOF'" \
 '     <the lines>' \
 '     EOF' \
-'   The trailing `retro` is the provenance and must not be dropped. It is what' \
-'   keeps these apart from what a live session wrote, in a rate that exists to' \
-'   measure exactly that.' \
-"     sh '$LEDGER_SH' apply '$LEDGER_FILE' '$RETRO_DELTA' ${WROTE_AT:-1} retro" \
+"     sh '$RETRO_LEDGER_SH' apply '$LEDGER_FILE' '$RETRO_DELTA' ${WROTE_AT:-1} retro" \
 "     rm -f '$RETRO_DELTA' '$RETRO_DIGEST'" \
+'   The trailing `retro` on the apply is the provenance and must not be dropped.' \
+'   It is what keeps these apart from what a live session wrote, in a rate that' \
+'   exists to measure exactly that.' \
 '' \
 '4) Say in ONE line what the retro recovered, then do what the user asked.' \
 '' \
