@@ -22,6 +22,7 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SS_HOOK="$REPO/scripts/handoff-session-start.sh"
 LEDGER_SH="$REPO/scripts/handoff-ledger.sh"
 UP_HOOK="$REPO/scripts/handoff-prompt-hook.sh"
+READOUT="$REPO/scripts/ledger-readout.sh"
 
 command -v jq >/dev/null || { echo "jq not in PATH"; exit 1; }
 
@@ -613,6 +614,38 @@ else
   printf '%s\n' "$CTX" | sed -n '/HOW THIS/,$p' | sed 's/^/     /'
 fi
 rm -rf "$EBOX"
+
+# --- Case W: the write rate must not count its own instrumentation ---------
+#
+# ledger-readout.sh answers the one question no test can: how often a live
+# session actually writes deltas. That number is what the decision to automate
+# the handoff trigger is pinned to. It counted a link as having written if the
+# ledger held ANY event for it — and the hook pointer is emitted unconditionally
+# on the bare-`handoff` paths, so the readout would have driven itself to 100%
+# and reported its own instrumentation as the finding.
+WBOX=$(mktemp -d)
+mkdir -p "$WBOX/.claude/handoff-chains"
+CH="$WBOX/.claude/handoff-chains/-w-proj.jsonl"
+for i in 1 2 3 4; do
+  printf '{"chain":"CW","n":%d,"slug":"w","session":"W%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' \
+    "$i" "$i" "$i" >> "$CH"
+done
+# Link 1 a session wrote for; links 2 and 3 ended model-free and carry only the
+# hook's pointer. Three of four handoffs, one real write.
+L="$WBOX/.claude/handoff-chains/-w-proj.CW.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tsomething a session declared\n' >> "$L"
+printf '2026-08-23T00:00:00Z\t2\tNOTE\t-\t-\tlink ended model-free\n' >> "$L"
+printf '2026-08-23T00:00:00Z\t3\tNOTE\t-\t-\tlink ended model-free\n' >> "$L"
+
+RO=$(HOME="$WBOX" sh "$READOUT" 2>/dev/null)
+if printf '%s' "$RO" | grep -q '1 wrote deltas' \
+  && printf '%s' "$RO" | grep -q '2 links model-free'; then
+  ok "W: the readout counts one session write and reports the two hook pointers separately"
+else
+  no "W: the write rate absorbed the hook's own pointers"
+  printf '%s\n' "$RO" | sed 's/^/     /'
+fi
+rm -rf "$WBOX"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

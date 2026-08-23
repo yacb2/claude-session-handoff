@@ -13,6 +13,15 @@
 #   handoffs   links that could have written deltas (every link but the last)
 #   wrote      how many of those actually did
 #   turns      course corrections recorded, which is the half that is easy to skip
+#   notes      links that recorded ONLY a hook-written pointer, i.e. ended
+#              model-free and had nothing else said about them
+#
+# `wrote` counts links a SESSION wrote for, so a NOTE never counts toward it.
+# That distinction is the whole point of the number: a hook pointer is emitted
+# unconditionally on the bare-`handoff` paths, so counting it would drive this
+# rate toward 100% by construction — and this rate is what the decision to
+# automate the trigger is pinned to. It would have been the readout reporting
+# its own instrumentation as the result.
 #
 # A chain with no ledger file reports wrote=0 — a real zero, not missing data,
 # and the failure mode this exists to make visible. With one exception that has
@@ -33,10 +42,10 @@ for C in "${HOME}/.claude/scripts/handoff-ledger.sh" "${CLAUDE_DIR:-}/scripts/ha
   INSTALLED_AT=$(date -u -r "$C" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) && break
 done
 
-TOT_H=0; TOT_W=0; TOT_T=0; TOT_C=0; TOT_PRE=0
+TOT_H=0; TOT_W=0; TOT_T=0; TOT_C=0; TOT_PRE=0; TOT_N=0
 
-printf '%-34s %6s %9s %6s %6s\n' 'chain' 'links' 'handoffs' 'wrote' 'turns'
-printf '%-34s %6s %9s %6s %6s\n' '----------------------------------' '------' '---------' '------' '------'
+printf '%-34s %6s %9s %6s %6s %6s\n' 'chain' 'links' 'handoffs' 'wrote' 'turns' 'notes'
+printf '%-34s %6s %9s %6s %6s %6s\n' '----------------------------------' '------' '---------' '------' '------' '------'
 
 for F in "$STORE"/*.jsonl; do
   [ -f "$F" ] || continue
@@ -50,16 +59,23 @@ for F in "$STORE"/*.jsonl; do
     HANDOFFS=$((LINKS - 1))
     [ "$HANDOFFS" -ge 1 ] || continue
     if [ -f "$LEDGER" ]; then
-      WROTE=$(awk -F'\t' '{print $2}' "$LEDGER" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+      WROTE=$(awk -F'\t' '$3!="NOTE" {print $2}' "$LEDGER" 2>/dev/null | sort -u | wc -l | tr -d ' ')
       TURNS=$(awk -F'\t' '$3=="TURN"' "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')
+      # Links whose ONLY event is a pointer. Reported rather than merely
+      # excluded: without it a link that ended model-free reads exactly like a
+      # link nothing was ever recorded for, and telling those two apart is what
+      # the pointer was added for.
+      NOTES=$(awk -F'\t' '{if ($3=="NOTE") n[$2]=1; else w[$2]=1}
+                           END {c=0; for (k in n) if (!(k in w)) c++; print c}' \
+        "$LEDGER" 2>/dev/null)
     else
-      WROTE=0; TURNS=0
+      WROTE=0; TURNS=0; NOTES=0
     fi
     LAST=$(jq -r --arg c "$CHAIN" 'select(.chain == $c) | .at' "$F" 2>/dev/null | sort | tail -1)
     MARK=""
     if [ -n "$INSTALLED_AT" ] && [ -n "$LAST" ] && [ "$LAST" \< "$INSTALLED_AT" ]; then MARK=" pre"; fi
-    printf '%-34s %6s %9s %6s %6s%s\n' "$(printf '%s' "$PROJ" | tail -c 18).$(printf '%s' "$CHAIN" | cut -c1-6)" \
-      "$LINKS" "$HANDOFFS" "$WROTE" "$TURNS" "$MARK"
+    printf '%-34s %6s %9s %6s %6s %6s%s\n' "$(printf '%s' "$PROJ" | tail -c 18).$(printf '%s' "$CHAIN" | cut -c1-6)" \
+      "$LINKS" "$HANDOFFS" "$WROTE" "$TURNS" "$NOTES" "$MARK"
     # Subshell: the pipeline above means these cannot escape, so the totals are
     # recomputed below rather than carried out of here. Saying so beats a total
     # that is silently always zero.
@@ -81,16 +97,19 @@ for F in "$STORE"/*.jsonl; do
       TOT_PRE=$((TOT_PRE + 1)); continue
     fi
     if [ -f "$L" ]; then
-      W=$(awk -F'\t' '{print $2}' "$L" | sort -u | wc -l | tr -d ' ')
+      W=$(awk -F'\t' '$3!="NOTE" {print $2}' "$L" | sort -u | wc -l | tr -d ' ')
       T=$(awk -F'\t' '$3=="TURN"' "$L" | wc -l | tr -d ' ')
-    else W=0; T=0; fi
+      NT=$(awk -F'\t' '{if ($3=="NOTE") n[$2]=1; else w[$2]=1}
+                        END {c=0; for (k in n) if (!(k in w)) c++; print c}' "$L")
+    else W=0; T=0; NT=0; fi
     TOT_H=$((TOT_H + H)); TOT_W=$((TOT_W + W)); TOT_T=$((TOT_T + T)); TOT_C=$((TOT_C + 1))
+    TOT_N=$((TOT_N + NT))
   done
 done
 
 if [ "$TOT_H" -gt 0 ]; then
-  printf 'TOTAL: %s chains, %s handoffs, %s wrote deltas (%s%%), %s turns recorded\n' \
-    "$TOT_C" "$TOT_H" "$TOT_W" "$(( TOT_W * 100 / TOT_H ))" "$TOT_T"
+  printf 'TOTAL: %s chains, %s handoffs, %s wrote deltas (%s%%), %s turns recorded, %s links model-free\n' \
+    "$TOT_C" "$TOT_H" "$TOT_W" "$(( TOT_W * 100 / TOT_H ))" "$TOT_T" "$TOT_N"
   echo
   echo 'The rate is the write side. Automating the trigger is only defensible once'
   echo 'it is high enough that a handoff fired at an arbitrary moment still records'
