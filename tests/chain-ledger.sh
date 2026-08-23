@@ -630,22 +630,65 @@ for i in 1 2 3 4; do
   printf '{"chain":"CW","n":%d,"slug":"w","session":"W%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' \
     "$i" "$i" "$i" >> "$CH"
 done
-# Link 1 a session wrote for; links 2 and 3 ended model-free and carry only the
-# hook's pointer. Three of four handoffs, one real write.
+# Link 1 a session wrote for; links 2 and 3 ended model-free and carry the
+# hook's pointer. Link 3 was recovered afterwards, so only link 2 stays a bare
+# pointer — `notes` counts links nothing was ever SAID about, which is why
+# recovering one moves it out of that column and into `retro`.
 L="$WBOX/.claude/handoff-chains/-w-proj.CW.ledger"
 printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tsomething a session declared\n' >> "$L"
 printf '2026-08-23T00:00:00Z\t2\tNOTE\t-\t-\tlink ended model-free\n' >> "$L"
 printf '2026-08-23T00:00:00Z\t3\tNOTE\t-\t-\tlink ended model-free\n' >> "$L"
+# Link 3 was later recovered by a successor reading its transcript. A real
+# record of the link and NOT a session write: the retro exists to take the
+# dying session off the write path, so folding these in would drive the rate
+# toward 100% by construction — and it would look like the hoped-for outcome.
+printf '2026-08-23T00:00:00Z\t3\tTURN\t-\t-\trecovered afterwards\tretro\n' >> "$L"
 
 RO=$(HOME="$WBOX" sh "$READOUT" 2>/dev/null)
 if printf '%s' "$RO" | grep -q '1 wrote deltas' \
-  && printf '%s' "$RO" | grep -q '2 links model-free'; then
-  ok "W: the readout counts one session write and reports the two hook pointers separately"
+  && printf '%s' "$RO" | grep -q '1 recovered by retro' \
+  && printf '%s' "$RO" | grep -q '1 links model-free'; then
+  ok "W: one session write, one retro recovery and one bare pointer stay three separate numbers"
 else
-  no "W: the write rate absorbed the hook's own pointers"
+  no "W: the write rate absorbed the pointers or the retro's own recoveries"
   printf '%s\n' "$RO" | sed 's/^/     /'
 fi
 rm -rf "$WBOX"
+
+# --- Case X: a recovered entry says so in the trajectory --------------------
+#
+# Provenance is not only a counter. A reader of the trajectory is entitled to
+# know that an entry was reconstructed from a transcript by a later session
+# rather than written by the link that lived it — the two are not equally
+# reliable, and nothing else in the block distinguishes them.
+box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+XL="$SANDBOX/.claude/handoff-chains/x.ledger"
+printf '2026-08-23T00:00:00Z\t1\tTURN\t-\t-\twritten by the link itself\tsession\n' > "$XL"
+printf '2026-08-23T00:00:00Z\t1\tTURN\t-\t-\tdug out of the transcript later\tretro\n' >> "$XL"
+XOUT=$(sh "$LEDGER_SH" render "$XL" 2 2>/dev/null)
+if printf '%s' "$XOUT" | grep -q 'turn (recovered) — dug out of the transcript' \
+  && printf '%s' "$XOUT" | grep -q 'turn — written by the link itself'; then
+  ok "X: a recovered entry is marked in the trajectory and a session-written one is not"
+else
+  no "X: the trajectory did not distinguish a recovered entry from a written one"
+  printf '%s\n' "$XOUT" | sed 's/^/     /'
+fi
+
+# --- Case X2: apply records provenance, and rejects anything else ----------
+box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+YL="$SANDBOX/.claude/handoff-chains/y.ledger"
+printf 'TURN a course correction\n' > "$SANDBOX/d.txt"
+sh "$LEDGER_SH" apply "$YL" "$SANDBOX/d.txt" 3 retro
+sh "$LEDGER_SH" apply "$YL" "$SANDBOX/d.txt" 3 '; rm -rf /'
+if [ "$(awk -F'\t' 'NR==1 {print $7}' "$YL")" = "retro" ] \
+  && [ "$(awk -F'\t' 'NR==2 {print $7}' "$YL")" = "session" ]; then
+  ok "X2: apply records the source it is given and falls back to session for anything else"
+else
+  no "X2: provenance was not recorded, or an unknown source was written through"
+  cat "$YL" | sed 's/^/     /'
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

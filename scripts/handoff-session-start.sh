@@ -321,8 +321,10 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
 'rather than making the dying session pay for it.' \
 '' \
 '1) Build the digest. Mechanical, no model, well under a second even on a' \
-'   260 MB transcript:' \
-"     python3 '$RETRO_FILTER' '$RETRO_TRANSCRIPT' > '$RETRO_DIGEST'" \
+'   260 MB transcript. The umask is not optional: the digest is up to 200 KB of' \
+'   conversation prose copied out of a transcript Claude Code stores 0600, and' \
+'   your shell would otherwise write it 0644 — more readable than its source.' \
+"     (umask 077; python3 '$RETRO_FILTER' '$RETRO_TRANSCRIPT' > '$RETRO_DIGEST')" \
 '' \
 '2) Launch ONE subagent on a small model (Sonnet) over that digest — not' \
 '   yourself; the whole saving is that you never read the transcript. Ask it' \
@@ -343,7 +345,10 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
 "     cat > '$RETRO_DELTA' <<'EOF'" \
 '     <the lines>' \
 '     EOF' \
-"     sh '$LEDGER_SH' apply '$LEDGER_FILE' '$RETRO_DELTA' ${WROTE_AT:-1}" \
+'   The trailing `retro` is the provenance and must not be dropped. It is what' \
+'   keeps these apart from what a live session wrote, in a rate that exists to' \
+'   measure exactly that.' \
+"     sh '$LEDGER_SH' apply '$LEDGER_FILE' '$RETRO_DELTA' ${WROTE_AT:-1} retro" \
 "     rm -f '$RETRO_DELTA' '$RETRO_DIGEST'" \
 '' \
 '4) Say in ONE line what the retro recovered, then do what the user asked.' \
