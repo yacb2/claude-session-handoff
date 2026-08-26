@@ -23,6 +23,23 @@
 #
 #   <iso8601>\t<link>\t<verb>\t<id>\t<type>\t<text>\t<source>
 #
+# Two writer paths produce those lines, and both must agree on the format:
+#
+#   1. `apply` below — the hook feeds it the delta file a session wrote (or a
+#      retro recovered), and `sanitize` flattens each text to one line.
+#   2. A direct append — a session (or a hand) writing a row straight into the
+#      file in the shape above, which the render path reads the same way.
+#
+# A row is one line, and its length is not a format problem: `sanitize` used to
+# end in `cut -c1-400` and clipped 12 of 48 rows on one real chain mid-word,
+# including a standing authorization that ended in "The ha", while rows from
+# path 2 in the same file ran to 900+ chars whole. There is no length limit.
+#
+# `iso8601` is the wall clock at WRITE time; `link` is the logical position the
+# row belongs to. They are not monotone together: a row back-filled into link 1
+# by path 2 after link 3 has run carries a later timestamp than link 3's rows.
+# Order the record by link, never by timestamp.
+#
 # `source` is `session` when a live session wrote the deltas at its own handoff,
 # and `retro` when a successor recovered them from the transcript afterwards.
 # Both are real records of the link and both render the same; the field exists
@@ -88,8 +105,8 @@ LEDGER_MAX_ITEMS=24
 LEDGER_TRAIL_LINKS=3
 
 # Model-written text joined into a rendered block: one line, no control
-# characters, bounded. Same treatment the slug already gets in the sibling hook,
-# plus one this text needs and the slug does not.
+# characters. Same treatment the slug already gets in the sibling hook, plus one
+# this text needs and the slug does not. Not bounded — see the header.
 #
 # The block it lands in is delimited by `=== CHAIN LEDGER ===` lines, so an item
 # whose text carries that shape closes the block early and everything after it
@@ -102,8 +119,7 @@ sanitize() {
   printf '%s' "$1" \
     | tr -d '\000-\010\013\014\016-\037' \
     | tr '\t' ' ' \
-    | sed 's/===*/=/g' \
-    | cut -c1-400
+    | sed 's/===*/=/g'
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }

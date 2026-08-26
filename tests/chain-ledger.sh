@@ -848,5 +848,37 @@ else
   printf '%s\n' "$ZOUT" | sed -n '/STALE/,$p' | sed 's/^/     /'
 fi
 
+# --- Case Z: a long row survives both writer paths whole (BL-026) ----------
+#
+# `sanitize` ended in `cut -c1-400`, silently. On one real 48-row chain 12 rows
+# were clipped mid-word — including the standing fleet authorization, which
+# ended in "The ha". Rows written by the other path (a direct append to the
+# file, which the header documents as the format) survived at 900+ chars, so
+# the same file carried two limits. Rows are one line; length is not a format
+# problem.
+box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+LL="$SANDBOX/.claude/handoff-chains/long.ledger"
+LONGTXT=$(awk 'BEGIN { for (i = 0; i < 60; i++) printf "word%02d ab ", i }')   # 600 chars
+printf 'OPEN OWED %s\n' "$LONGTXT" > "$SANDBOX/delta"
+sh "$LEDGER_SH" apply "$LL" "$SANDBOX/delta" 1 session
+ZAPPLY=$(awk -F'\t' '$3=="OPEN" {print length($6)}' "$LL")
+if [ "$ZAPPLY" = "600" ]; then
+  ok "Z: apply keeps a 600-char row whole"
+else
+  no "Z: apply clipped a 600-char row to ${ZAPPLY:-nothing}"
+fi
+printf '2026-08-23T00:00:00Z\t2\tOPEN\td2\tRULE\t%s\tsession\n' "$LONGTXT" >> "$LL"
+ZOUT=$(sh "$LEDGER_SH" render "$LL" 3 2>/dev/null)
+ZR=0
+printf '%s\n' "$ZOUT" | grep -q "d1 .*word59 ab $" && ZR=$((ZR + 1))
+printf '%s\n' "$ZOUT" | grep -q "d2 .*word59 ab $" && ZR=$((ZR + 1))
+if [ "$ZR" -eq 2 ]; then
+  ok "Z: render shows both 600-char rows whole (apply and direct append)"
+else
+  no "Z: render lost the tail of a 600-char row ($ZR of 2 whole)"
+  printf '%s\n' "$ZOUT" | grep 'd[12] ' | cut -c1-120 | sed 's/^/     /'
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
