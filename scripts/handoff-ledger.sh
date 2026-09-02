@@ -117,9 +117,9 @@ LEDGER_TRAIL_LINKS=3
 # total — no run of three survives, so no delimiter can be spelled.
 sanitize() {
   printf '%s' "$1" \
-    | tr -d '\000-\010\013\014\016-\037' \
+    | tr -d '\000-\010\013-\037' \
     | tr '\t' ' ' \
-    | sed 's/===*/=/g'
+    | sed 's/===*/==/g'
 }
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -154,6 +154,10 @@ ledger_apply() {
     # the release date`. Indented delta lines are not a hypothetical; the block
     # that asks a model to write them shows them indented for readability.
     _line=${_line#"${_line%%[![:space:]]*}"}
+    # One separator. `awk '{print $1}'` splits on any whitespace run and
+    # `cut -d' '` on single spaces, so a tab or a double space carried the
+    # type token into the text or truncated it. Normalised once, here.
+    _line=$(printf '%s' "$_line" | tr -d '\r' | tr '\t' ' ' | tr -s ' ')
     _verb=$(printf '%s' "$_line" | awk '{print $1}')
     case "$_verb" in
       CHARTER)
@@ -196,10 +200,14 @@ ledger_apply() {
         # it writes into.
         [ "$_src" = "retro" ] && continue
         _id=$(printf '%s' "$_line" | awk '{print $2}')
-        case "$_id" in
-          d[0-9]*) ;;
-          *) continue ;;
-        esac
+        # Exactly d<digits>, and an id the ledger (or this delta) has OPENed.
+        # The renderer marks an id closed in file order, so a CLOSE of an id
+        # not yet assigned would have born-closed the item that later got it.
+        printf '%s' "$_id" | grep -qE '^d[0-9]+$' || continue
+        if ! { [ -f "$_ledger" ] && grep -q "	OPEN	${_id}	" "$_ledger"; } \
+           && ! printf '%s' "$_out" | grep -q "	OPEN	${_id}	"; then
+          continue
+        fi
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f3-)")
         [ -n "$_text" ] || _text="closed"
         _out="${_out}${_at}	${_n}	CLOSE	${_id}	-	${_text}	${_src}
@@ -242,16 +250,15 @@ ledger_render() {
         id=order[i]
         if (id in closed) continue
         n++
+        openset[id]=1
         if (n > cap) { extra++; continue }
         age = now - born[id]
         if (age <= 0) label=sprintf("opened at link %s", born[id])
         else if (age == 1) label=sprintf("opened at link %s, carried 1 link", born[id])
         else label=sprintf("opened at link %s, carried %d links", born[id], age)
         printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
-        openset[id]=1
       }
       if (extra > 0) printf "  ... and %d more open items, not shown (cap %d). The list is too long: close what is settled.\n", extra, cap
-      if (n == 0 && charter == "" && e == 0) exit 1
 
       # The trajectory. Bounded on purpose: a long chain would otherwise inject
       # its whole history every link, which is the accumulate-everything design
@@ -274,7 +281,7 @@ ledger_render() {
           # `d1` — contradicting the "no keyword guessing" the comment above
           # promises, in the one place the window is allowed an exception.
           for (id in openset)
-            if (match(evt[i], "(^|[^0-9A-Za-z])" id "([^0-9]|$)")) keep=1
+            if (match(evt[i], "(^|[^0-9A-Za-z])" id "([^0-9A-Za-z]|$)")) keep=1
           if (keep) { printf "  %s   <- still bears on an open item\n", ev[i]; shown++; continue }
           held++
           if (oldest_held == 0 || evn[i] < oldest_held) oldest_held = evn[i]
