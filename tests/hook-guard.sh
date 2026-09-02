@@ -528,6 +528,74 @@ else
   no "X: stale title survived a title-less handoff (triggered=$TRIGGERED out=[$TITLE_OUT])"
 fi
 
+# Case AG — a local command's sentinel is not the last reply. `/model`, `/cost`
+# and friends leave `No response requested.` as a real assistant line, and on
+# 2026-09-02 a real link seeded exactly those 22 bytes. The reply before it is
+# what the user meant, and the ask that produced it travels with it.
+cat > "$TAILDIR/sentinel.jsonl" <<'AGEOF'
+{"type":"user","message":{"content":"fix the parser please"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Parser fixed: AG_REAL_REPLY_MARKER"}]}}
+{"type":"user","message":{"content":"<local-command-stdout>Set model to Fable</local-command-stdout>"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"No response requested."}]}}
+AGEOF
+run_hook "$(printf 'handoff' | jq -Rs --arg t "$TAILDIR/sentinel.jsonl" '{prompt:., transcript_path:$t}')" "$TEST_PID" "$PATH"
+if [ "$PAYLOAD_EXISTS" = 1 ] && contains "$PAYLOAD_OUT" "AG_REAL_REPLY_MARKER" \
+  && ! contains "$PAYLOAD_OUT" "No response requested" \
+  && contains "$PAYLOAD_OUT" "--- last ask from the user ---
+| fix the parser please"; then
+  ok "AG: the /model sentinel is skipped; the real reply and its ask are seeded"
+else
+  no "AG: sentinel handling wrong (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Case AH — an interrupted turn's lead-in is not the last reply. The lead-in
+# has no tool_use, so the old line filter took it (155 chars of "leo qué nombre
+# recibió realmente" on a real link, 2026-08-28). The last COMPLETED turn is.
+cat > "$TAILDIR/interrupted.jsonl" <<'AHEOF'
+{"type":"user","message":{"content":"first task"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Done with the first task: AH_COMPLETED_MARKER"}]}}
+{"type":"user","message":{"content":"second task"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Looking at it now: AH_LEADIN_MARKER"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"[Request interrupted by user for tool use]"}]}}
+{"type":"user","message":{"content":"[Request interrupted by user]"}}
+AHEOF
+run_hook "$(printf 'handoff' | jq -Rs --arg t "$TAILDIR/interrupted.jsonl" '{prompt:., transcript_path:$t}')" "$TEST_PID" "$PATH"
+if [ "$PAYLOAD_EXISTS" = 1 ] && contains "$PAYLOAD_OUT" "AH_COMPLETED_MARKER" \
+  && ! contains "$PAYLOAD_OUT" "AH_LEADIN_MARKER" \
+  && contains "$PAYLOAD_OUT" "| first task"; then
+  ok "AH: an interrupted turn is skipped; the last completed turn is seeded"
+else
+  no "AH: interrupted turn handling wrong (exists=$PAYLOAD_EXISTS out=[$PAYLOAD_OUT])"
+fi
+
+# Case AI — a short reply to a prompt no human typed is skipped, a long one is
+# kept. On 2026-08-27 a real link seeded 200 chars of "todo está en el resumen
+# anterior" answering a task notification, while two other links answered one
+# with a 2 KB recap that was the right thing to seed. The discriminator is
+# both conditions together, so both arms are asserted.
+cat > "$TAILDIR/sysshort.jsonl" <<'AIEOF'
+{"type":"user","message":{"content":"close out the plan"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Plan closed. Summary: AI_HUMAN_TURN_MARKER"}]}}
+{"type":"user","message":{"content":"<task-notification><task-id>x</task-id></task-notification>"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Just the watcher finishing; everything is in the summary above. AI_SHORT_SYS_MARKER"}]}}
+AIEOF
+run_hook "$(printf 'handoff' | jq -Rs --arg t "$TAILDIR/sysshort.jsonl" '{prompt:., transcript_path:$t}')" "$TEST_PID" "$PATH"
+AI_SHORT_OK=0
+if [ "$PAYLOAD_EXISTS" = 1 ] && contains "$PAYLOAD_OUT" "AI_HUMAN_TURN_MARKER" \
+  && ! contains "$PAYLOAD_OUT" "AI_SHORT_SYS_MARKER"; then
+  AI_SHORT_OK=1
+fi
+AI_LONG=$(awk 'BEGIN{for(i=0;i<40;i++) printf "phase %d closed with its commit and tests; ", i}')
+printf '{"type":"user","message":{"content":"close out the plan"}}\n{"type":"assistant","message":{"content":[{"type":"text","text":"AI_HUMAN_TURN_MARKER"}]}}\n{"type":"user","message":{"content":"<task-notification><task-id>x</task-id></task-notification>"}}\n{"type":"assistant","message":{"content":[{"type":"text","text":"Recap after the run: %s AI_LONG_SYS_MARKER"}]}}\n' "$AI_LONG" > "$TAILDIR/syslong.jsonl"
+run_hook "$(printf 'handoff' | jq -Rs --arg t "$TAILDIR/syslong.jsonl" '{prompt:., transcript_path:$t}')" "$TEST_PID" "$PATH"
+if [ "$AI_SHORT_OK" = 1 ] && [ "$PAYLOAD_EXISTS" = 1 ] && contains "$PAYLOAD_OUT" "AI_LONG_SYS_MARKER" \
+  && ! contains "$PAYLOAD_OUT" "AI_HUMAN_TURN_MARKER"; then
+  ok "AI: a short reply to a system prompt is skipped, a long one is kept"
+else
+  no "AI: system-prompt discriminator wrong (short_ok=$AI_SHORT_OK long_out=[$PAYLOAD_OUT])"
+fi
+
 # --- incoming half: handoff-session-start.sh --------------------------------
 SS_CHID=77778
 SS_KEY=$CHAIN_KEY
@@ -728,6 +796,63 @@ if contains "$SS_OUT" "a brief worth keeping" && [ -z "$AF_TITLE" ] \
   ok "AF: no stdin degrades to no lineage, and the payload is still seeded"
 else
   no "AF: stdin-less start misbehaved (title=[$AF_TITLE] out=[$SS_OUT])"
+fi
+rm -rf "$SSBOX"
+
+# Case AJ — the last curated brief survives a model-free link, and the
+# successor is told where the chain lives. Three arrivals on one chain:
+#   link 2 arrives with a drafted brief      -> kept as <key>.<chain>.brief, 0600
+#   link 3 arrives with a raw transcript tail -> the brief is re-injected,
+#                                                labelled with the link that
+#                                                drafted it, and the chain
+#                                                context lists record, ledger,
+#                                                brief and every predecessor's
+#                                                transcript
+#   link 4 arrives with a typed `handoff:` brief -> it replaces the kept one
+# Measured need: 25 real bare links, none of which could see the structured
+# brief its chain had drafted earlier (proofs/bare-handoff-tail-quality/).
+ss_box "prev=SESS-A
+slug=Refactor auth" "slug: Refactor auth
+## Goal
+AJ_CURATED_BRIEF_MARKER" ""
+mkdir -p "$SSBOX/.claude/projects/$SS_KEY"
+: > "$SSBOX/.claude/projects/$SS_KEY/SESS-A.jsonl"
+ss_run "SESS-B" "$PATH"
+AJ_BRIEF="$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-A.brief"
+AJ_STEP1=0
+if [ -f "$AJ_BRIEF" ] && [ "$(sed -n 1p "$AJ_BRIEF")" = "link=1" ] \
+  && [ "$(ls -l "$AJ_BRIEF" | cut -c1-10)" = "-rw-------" ] \
+  && contains "$(cat "$AJ_BRIEF")" "AJ_CURATED_BRIEF_MARKER"; then
+  AJ_STEP1=1
+fi
+: > "$SSBOX/.claude/projects/$SS_KEY/SESS-B.jsonl"
+printf 'prev=SESS-B\nslug=Refactor auth\n' > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"
+printf '[RAW TRANSCRIPT TAIL — NOT a curated handoff brief]\n--- last reply ---\n| AJ_TAIL_MARKER\n' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-C" "$PATH"
+AJ_CTX=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+AJ_STEP2=0
+if contains "$AJ_CTX" "AJ_TAIL_MARKER" \
+  && contains "$AJ_CTX" "=== LAST CURATED BRIEF — drafted at link 1 of this chain, 1 link(s) ago ===" \
+  && contains "$AJ_CTX" "AJ_CURATED_BRIEF_MARKER" \
+  && contains "$AJ_CTX" "=== CHAIN CONTEXT — this session is link 3 of chain SESS-A ===" \
+  && contains "$AJ_CTX" "chain record : $SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl" \
+  && contains "$AJ_CTX" "ledger       : $SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-A.ledger" \
+  && contains "$AJ_CTX" "last brief   : $AJ_BRIEF" \
+  && contains "$AJ_CTX" "link 2   $SSBOX/.claude/projects/$SS_KEY/SESS-B.jsonl" \
+  && contains "$AJ_CTX" "link 1   $SSBOX/.claude/projects/$SS_KEY/SESS-A.jsonl"; then
+  AJ_STEP2=1
+fi
+printf 'prev=SESS-C\nslug=Refactor auth\n' > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"
+printf 'AJ_TYPED_BRIEF_MARKER: next is the parser' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-D" "$PATH"
+AJ_CTX3=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if [ "$AJ_STEP1" = 1 ] && [ "$AJ_STEP2" = 1 ] \
+  && [ "$(sed -n 1p "$AJ_BRIEF")" = "link=3" ] \
+  && contains "$(cat "$AJ_BRIEF")" "AJ_TYPED_BRIEF_MARKER" \
+  && ! contains "$AJ_CTX3" "LAST CURATED BRIEF"; then
+  ok "AJ: the last curated brief is kept, re-injected under a tail, replaced by a new one; chain paths listed"
+else
+  no "AJ: curated brief / chain context wrong (step1=$AJ_STEP1 step2=$AJ_STEP2 brief_head=[$(sed -n 1p "$AJ_BRIEF" 2>/dev/null)] ctx2=[$AJ_CTX])"
 fi
 rm -rf "$SSBOX"
 
