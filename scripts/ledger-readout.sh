@@ -56,6 +56,29 @@ TOT_H=0; TOT_W=0; TOT_T=0; TOT_C=0; TOT_PRE=0; TOT_N=0; TOT_R=0
 printf '%-34s %6s %9s %6s %6s %6s %6s\n' 'chain' 'links' 'handoffs' 'wrote' 'retro' 'turns' 'notes'
 printf '%-34s %6s %9s %6s %6s %6s %6s\n' '----------------------------------' '------' '---------' '------' '------' '------' '------'
 
+# ledger_counts <ledger> -> "wrote retros turns notes" (all 0 when absent).
+#   wrote : links with a session-written entry
+#   retros: links whose ONLY entries are recovered — where both exist the
+#           session wrote, and the retro merely added
+#   notes : links whose ONLY event is a pointer; reported rather than merely
+#           excluded, since a link that ended model-free would otherwise read
+#           exactly like a link nothing was ever recorded for
+ledger_counts() {
+  [ -f "$1" ] || { printf '0 0 0 0'; return; }
+  awk -F'\t' '
+    $3!="NOTE" && $7!="retro" { w[$2]=1 }
+    $3!="NOTE" && $7=="retro" { r[$2]=1 }
+    $3=="NOTE" { n[$2]=1 }
+    $3=="TURN" { t++ }
+    END {
+      wc=0; for (k in w) wc++
+      rc=0; for (k in r) if (!(k in w)) rc++
+      nc=0; for (k in n) if (!(k in w) && !(k in r)) nc++
+      printf "%d %d %d %d", wc, rc, t+0, nc
+    }' "$1" 2>/dev/null
+}
+chain_last() { jq -r --arg c "$2" 'select(.chain == $c) | .at' "$1" 2>/dev/null | sort | tail -1; }
+
 for F in "$STORE"/*.jsonl; do
   [ -f "$F" ] || continue
   PROJ=$(basename "$F" .jsonl)
@@ -67,25 +90,8 @@ for F in "$STORE"/*.jsonl; do
     LEDGER="$STORE/$PROJ.$CHAIN.ledger"
     HANDOFFS=$((LINKS - 1))
     [ "$HANDOFFS" -ge 1 ] || continue
-    if [ -f "$LEDGER" ]; then
-      WROTE=$(awk -F'\t' '$3!="NOTE" && $7!="retro" {print $2}' "$LEDGER" 2>/dev/null | sort -u | wc -l | tr -d ' ')
-      # A link counts as recovered only if NOTHING it wrote for itself is on
-      # record. Where both exist the session wrote, and the retro merely added.
-      RETROS=$(awk -F'\t' '$3!="NOTE" {if ($7=="retro") r[$2]=1; else w[$2]=1}
-                            END {c=0; for (k in r) if (!(k in w)) c++; print c}' \
-        "$LEDGER" 2>/dev/null)
-      TURNS=$(awk -F'\t' '$3=="TURN"' "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')
-      # Links whose ONLY event is a pointer. Reported rather than merely
-      # excluded: without it a link that ended model-free reads exactly like a
-      # link nothing was ever recorded for, and telling those two apart is what
-      # the pointer was added for.
-      NOTES=$(awk -F'\t' '{if ($3=="NOTE") n[$2]=1; else w[$2]=1}
-                           END {c=0; for (k in n) if (!(k in w)) c++; print c}' \
-        "$LEDGER" 2>/dev/null)
-    else
-      WROTE=0; TURNS=0; NOTES=0; RETROS=0
-    fi
-    LAST=$(jq -r --arg c "$CHAIN" 'select(.chain == $c) | .at' "$F" 2>/dev/null | sort | tail -1)
+    set -- $(ledger_counts "$LEDGER"); WROTE=$1; RETROS=$2; TURNS=$3; NOTES=$4
+    LAST=$(chain_last "$F" "$CHAIN")
     MARK=""
     if [ -n "$INSTALLED_AT" ] && [ -n "$LAST" ] && [ "$LAST" \< "$INSTALLED_AT" ]; then MARK=" pre"; fi
     printf '%-34s %6s %9s %6s %6s %6s %6s%s\n' "$(printf '%s' "$PROJ" | tail -c 18).$(printf '%s' "$CHAIN" | cut -c1-6)" \
@@ -106,18 +112,11 @@ for F in "$STORE"/*.jsonl; do
     [ -n "$LINKS" ] || continue
     H=$((LINKS - 1)); [ "$H" -ge 1 ] || continue
     L="$STORE/$PROJ.$CHAIN.ledger"
-    LAST=$(jq -r --arg c "$CHAIN" 'select(.chain == $c) | .at' "$F" 2>/dev/null | sort | tail -1)
+    LAST=$(chain_last "$F" "$CHAIN")
     if [ -n "$INSTALLED_AT" ] && [ -n "$LAST" ] && [ "$LAST" \< "$INSTALLED_AT" ]; then
       TOT_PRE=$((TOT_PRE + 1)); continue
     fi
-    if [ -f "$L" ]; then
-      W=$(awk -F'\t' '$3!="NOTE" && $7!="retro" {print $2}' "$L" | sort -u | wc -l | tr -d ' ')
-      R=$(awk -F'\t' '$3!="NOTE" {if ($7=="retro") r[$2]=1; else w[$2]=1}
-                       END {c=0; for (k in r) if (!(k in w)) c++; print c}' "$L")
-      T=$(awk -F'\t' '$3=="TURN"' "$L" | wc -l | tr -d ' ')
-      NT=$(awk -F'\t' '{if ($3=="NOTE") n[$2]=1; else w[$2]=1}
-                        END {c=0; for (k in n) if (!(k in w)) c++; print c}' "$L")
-    else W=0; T=0; NT=0; R=0; fi
+    set -- $(ledger_counts "$L"); W=$1; R=$2; T=$3; NT=$4
     TOT_H=$((TOT_H + H)); TOT_W=$((TOT_W + W)); TOT_T=$((TOT_T + T)); TOT_C=$((TOT_C + 1))
     TOT_N=$((TOT_N + NT)); TOT_R=$((TOT_R + R))
   done

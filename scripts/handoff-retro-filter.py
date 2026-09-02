@@ -49,8 +49,12 @@ COMMAND_ENVELOPE = re.compile(
 # item permanently in the one mechanism whose stated property is that items
 # leave only when something closes them. The block is regenerated for the
 # arriving session anyway, so nothing is lost by cutting it here.
+# Each cut ends at its END line, at the next header of its kind, or at the
+# end of the text: a block quoted without its END line otherwise leaked its
+# ids, and two blocks with the first END lost ate the prose between them.
 LEDGER_BLOCK = re.compile(
-    r"=== CHAIN LEDGER ===.*?=== END CHAIN LEDGER ===", re.S)
+    r"=== CHAIN LEDGER ===.*?(?:=== END CHAIN LEDGER ===|(?==== CHAIN LEDGER ===)|\Z)",
+    re.S)
 
 # The retro's own instruction block, for the same reason plus one. A link that
 # ran a retro closes by saying in one line what it recovered, and that sentence
@@ -58,7 +62,14 @@ LEDGER_BLOCK = re.compile(
 # subagent can re-emit the same finding as a fresh OPEN under a new id. The
 # block itself is worse: it names ids and tells its reader what to write.
 RETRO_BLOCK = re.compile(
-    r"=== PREDECESSOR RETRO.*?=== END PREDECESSOR RETRO ===", re.S)
+    r"=== PREDECESSOR RETRO.*?(?:=== END PREDECESSOR RETRO ===|(?==== PREDECESSOR RETRO)|\Z)",
+    re.S)
+
+# The third injected block names the live ledger's path and carries
+# instructions — a route around both guards above if quoted back.
+CONTEXT_BLOCK = re.compile(
+    r"=== CHAIN CONTEXT.*?(?:=== END CHAIN CONTEXT ===|(?==== CHAIN CONTEXT)|\Z)",
+    re.S)
 
 ELISION = "\n[... middle of the session elided to fit the digest budget ...]\n"
 
@@ -68,6 +79,7 @@ def clean(text):
         return ""
     text = LEDGER_BLOCK.sub("", text)
     text = RETRO_BLOCK.sub("", text)
+    text = CONTEXT_BLOCK.sub("", text)
     text = SYSTEM_REMINDER.sub("", text)
     text = COMMAND_ENVELOPE.sub("", text)
     # Collapse runs of blank lines left behind by the cuts above.
@@ -163,14 +175,24 @@ def render(entries, max_bytes):
     # pasting a document or a large file. One oversized turn at the end took the
     # whole recent tail with it: the five decisions before it, gone, on the
     # exact links a retro is for. Skipping it keeps them.
+    # A skipped turn leaves a marker where it was: the tail is otherwise
+    # non-contiguous and a retro reads it as an unbroken sequence.
+    SKIP = "[... 1 oversized turn dropped here ...]"
     tail, tail_n = [], 0
     for c in reversed(chunks[len(head):]):
         n = len(c.encode("utf-8")) + 2
         if tail_n + n > max_bytes - head_n:
+            if not tail or tail[-1] != SKIP:
+                tail.append(SKIP)
+                tail_n += len(SKIP) + 2
             continue
         tail.append(c)
         tail_n += n
     tail.reverse()
+    if tail and tail[0] == SKIP:
+        tail = tail[1:]
+    if not [c for c in tail if c != SKIP]:
+        tail = []
 
     # One turn larger than the whole budget, and nothing else: both ends come
     # back empty and the digest is the elision notice alone — 73 bytes saying
@@ -182,6 +204,9 @@ def render(entries, max_bytes):
         keep = max_bytes - len(ELISION) - 2
         raw = chunks[-1].encode("utf-8")[-keep:] if keep > 0 else b""
         body = raw.decode("utf-8", "replace")
+        # Drop the partial first line: it is the one line with no prefix.
+        if "\n" in body:
+            body = body.split("\n", 1)[1]
         if not body.strip():
             return ""
         return ELISION.replace(

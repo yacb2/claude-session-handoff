@@ -530,6 +530,68 @@ else
   printf '%s\n' "$CTX" | grep 'ledger  ' | sed 's/^/     /'
 fi
 
+# --- Case LG: the ledger's parser and renderer, six seams ------------------
+#
+# Each one alone recorded something wrong PERMANENTLY in an append-only file.
+box
+LG="$SANDBOX/lg.ledger"
+printf 'CLOSE d3 typo, meant nothing\nCLOSE d1abc not an id\n' > "$SANDBOX/d0"
+sh "$LEDGER_SH" apply "$LG" "$SANDBOX/d0" 1 session
+printf 'OPEN\tOWED\ttab separated item\nOPEN  OWED  double spaced item\nCHARTER\tship the thing\nOPEN RULE always use == not = in comparisons\r\nOPEN OWED third item\n' > "$SANDBOX/d1"
+sh "$LEDGER_SH" apply "$LG" "$SANDBOX/d1" 2 session
+R=$(sh "$LEDGER_SH" render "$LG" 3)
+if ! [ -f "$LG" ] || ! grep -q 'CLOSE' "$LG"; then
+  ok "LG1: a CLOSE of an id never opened, or of a malformed id, is not recorded"
+else
+  no "LG1: a CLOSE against an unknown or malformed id was recorded"
+  grep CLOSE "$LG" | sed 's/^/     /'
+fi
+if printf '%s' "$R" | grep -q 'd1 *OWED .*  tab separated item$' \
+  && printf '%s' "$R" | grep -q 'd2 *OWED .*  double spaced item$' \
+  && printf '%s' "$R" | grep -q 'CHARTER (set at link 2): ship the thing$'; then
+  ok "LG2: tab and multi-space separators parse like a single space"
+else
+  no "LG2: separator other than one space mangled the text"
+  printf '%s\n' "$R" | sed 's/^/     /' | head -8
+fi
+if printf '%s' "$R" | grep -q 'always use == not = in comparisons$' \
+  && ! od -c "$LG" | grep -q '\\r'; then
+  ok "LG3: a double = survives sanitize and a CR does not"
+else
+  no "LG3: sanitize collapsed == or let a CR through"
+  printf '%s\n' "$R" | grep 'always' | sed 's/^/     /'; od -c "$LG" | grep '\\r' | head -2
+fi
+if printf '%s' "$R" | grep -q 'd4 *OWED .*third item$'; then
+  ok "LG4: an item opened after a rejected CLOSE of its future id still renders"
+else
+  no "LG4: a rejected CLOSE still killed the id opened later"
+fi
+# Whole-token id match on the trajectory's one exception, on both sides.
+box
+LG="$SANDBOX/lg2.ledger"
+printf 'OPEN OWED first\n' > "$SANDBOX/e1"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e1" 1 session
+printf 'TURN this bears on d1abc only\nTURN this one on d1 itself\n' > "$SANDBOX/e2"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e2" 2 session
+R=$(LEDGER_TRAIL_LINKS=1 sh "$LEDGER_SH" render "$LG" 9)
+if printf '%s' "$R" | grep -q 'on d1 itself.*still bears' \
+  && ! printf '%s' "$R" | grep -q 'd1abc only.*still bears'; then
+  ok "LG5: the still-bears exception matches the id as a whole token on the right too"
+else
+  no "LG5: d1 matched inside d1abc (or the real match was lost)"
+  printf '%s\n' "$R" | grep 'bears\|more entr' | sed 's/^/     /'
+fi
+# The exception must also hold for items past the display cap.
+box
+LG="$SANDBOX/lg3.ledger"
+: > "$SANDBOX/e3"; i=1; while [ $i -le 26 ]; do printf 'OPEN OWED item number %s\n' "$i" >> "$SANDBOX/e3"; i=$((i+1)); done
+sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e3" 1 session
+printf 'TURN old note about d26 specifically\n' > "$SANDBOX/e4"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e4" 2 session
+R=$(LEDGER_TRAIL_LINKS=1 sh "$LEDGER_SH" render "$LG" 9)
+if printf '%s' "$R" | grep -q 'd26 specifically.*still bears'; then
+  ok "LG6: an entry naming an open item beyond the cap is still carried forward"
+else
+  no "LG6: the still-bears exception is off for items past the display cap"
+fi
+
 # --- Case R1b: the retro is handed what is already open --------------------
 #
 # The digest has the ledger block cut out, so the subagent cannot know what the
@@ -629,6 +691,56 @@ if command -v python3 >/dev/null 2>&1; then
     ok "D2: every quoted line carries the prefix, so none of it can forge a delimiter"
   else
     no "D2: quoted transcript lines were emitted unprefixed"
+  fi
+
+  # The cut must terminate on a malformed block: a quoted block cut off before
+  # its END line leaked live ids, and two blocks with the first END lost ate
+  # the real prose between them. Same for the CHAIN CONTEXT block, which names
+  # the live ledger's path and was not stripped at all.
+  printf '%s\n' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"A-KEEP === CHAIN LEDGER ===\nd2 OWED DROP-partial"}]}}' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"=== CHAIN LEDGER ===\nd3 OWED DROP-first\n=== END CHAIN LEDGER ===\nB-KEEP-THIS-PROSE\n=== CHAIN LEDGER ===\nd4 DROP-second\nC-KEEP === CHAIN LEDGER ===\nd5 DROP-third"}]}}' \
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"D-KEEP === CHAIN CONTEXT — this session is link 3 of chain x ===\n  ledger       : DROP-ledger-path\n=== END CHAIN CONTEXT ===\nE-KEEP"}]}}' \
+    > "$FBOX/m.jsonl"
+  DIGEST=$(python3 "$FILTER" "$FBOX/m.jsonl" 2>/dev/null)
+  MISSING=""; EXTRA=""
+  for want in A-KEEP B-KEEP-THIS-PROSE D-KEEP E-KEEP; do printf '%s' "$DIGEST" | grep -q "$want" || MISSING="$MISSING $want"; done
+  for bad in DROP-partial DROP-first DROP-second DROP-third DROP-ledger-path; do printf '%s' "$DIGEST" | grep -q "$bad" && EXTRA="$EXTRA $bad"; done
+  if [ -z "$MISSING" ] && [ -z "$EXTRA" ]; then
+    ok "D3: malformed ledger blocks and the chain-context block are cut without eating prose"
+  else
+    no "D3: block cut wrong — missing:${MISSING:-none} leaked:${EXTRA:-none}"
+  fi
+
+  # An oversized turn skipped from the MIDDLE of the tail leaves a marker where
+  # it was (one at the head/tail boundary is already the elision notice), and a
+  # single-oversized-turn digest starts on a prefixed line.
+  {
+    printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$(head -c 450 /dev/zero | tr '\0' 'A')"
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"MID-KEEP %s"}]}}\n' "$(head -c 100 /dev/zero | tr '\0' 'M')"
+    printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$(head -c 900 /dev/zero | tr '\0' 'B')"
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"NEW-ONE"}]}}\n'
+    printf '{"type":"user","message":{"role":"user","content":"NEW-TWO"}}\n'
+  } > "$FBOX/g.jsonl"
+  DIGEST=$(python3 "$FILTER" "$FBOX/g.jsonl" --max-bytes 1000 2>/dev/null)
+  _mid=$(printf '%s' "$DIGEST" | grep -n 'MID-KEEP' | cut -d: -f1)
+  _mk=$(printf '%s' "$DIGEST" | grep -n 'oversized turn dropped' | cut -d: -f1)
+  _new=$(printf '%s' "$DIGEST" | grep -n 'NEW-ONE' | cut -d: -f1)
+  if [ -n "$_mid" ] && [ -n "$_mk" ] && [ -n "$_new" ] && [ "$_mid" -lt "$_mk" ] && [ "$_mk" -lt "$_new" ]; then
+    ok "D4: a skipped oversized turn leaves a marker at its position"
+  else
+    no "D4: an oversized turn was dropped from the tail with no marker"
+    printf '%s\n' "$DIGEST" | sed 's/^/     /' | head -12
+  fi
+  {
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$(i=0; while [ $i -lt 60 ]; do printf 'line-%s-of-prose-here-with-some-words\\n' $i; i=$((i+1)); done)"
+  } > "$FBOX/h.jsonl"
+  DIGEST=$(python3 "$FILTER" "$FBOX/h.jsonl" --max-bytes 1000 2>/dev/null)
+  if ! printf '%s' "$DIGEST" | grep -v '^\[\.\.\.' | grep -v '^$' | grep -qv '^| '; then
+    ok "D5: a single-oversized-turn digest has no unprefixed partial first line"
+  else
+    no "D5: the oversized-turn digest starts mid-line, unprefixed"
+    printf '%s\n' "$DIGEST" | head -4 | sed 's/^/     /'
   fi
 
   # A session whose last act was pasting a document — one turn larger than the
