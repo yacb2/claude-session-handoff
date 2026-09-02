@@ -296,6 +296,91 @@ if [ -n "$LEDGER_BLOCK" ]; then
   fi
 fi
 
+# --- the last curated brief, and where the whole chain lives -------------------
+#
+# Measured on 25 real bare links (proofs/bare-handoff-tail-quality/): the tail
+# path carries the last word and the ledger carries the obligations, but the
+# goal / state / next-step STRUCTURE only ever exists in a brief a session
+# drafted — and that brief was consumed on arrival and never seen again. A bare
+# link after a curated one therefore lost the only structured state the chain
+# had. So a curated payload (the skill's brief, or a `handoff: <text>` the owner
+# typed) is kept per chain and re-injected under any later model-free link,
+# labelled with the link that wrote it so its age is legible. A tail is
+# recognisable by its own header, which the sibling hook writes; anything else
+# non-empty was drafted by a model or a human. Covered by hook-guard.sh Case AJ.
+#
+# Same directory and modes as the ledger: conversation content, 0600 in 0700.
+BRIEF_FILE=""
+if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
+  BRIEF_FILE="${CHAIN_FILE%.jsonl}.${CHAIN}.brief"
+  _wrote=$(( ${N:-1} - 1 ))
+  [ "$_wrote" -ge 1 ] || _wrote=1
+  case "$PAYLOAD" in
+    ''|'[RAW TRANSCRIPT TAIL'*)
+      if [ -f "$BRIEF_FILE" ]; then
+        _blink=$(sed -n '1s/^link=//p' "$BRIEF_FILE")
+        _bbody=$(sed '1d' "$BRIEF_FILE")
+        _bage=$(( _wrote - ${_blink:-0} ))
+        BRIEF_BLOCK=$(printf '=== LAST CURATED BRIEF — drafted at link %s of this chain, %s link(s) ago ===\n%s\n=== END LAST CURATED BRIEF ===\nThat is the most recent brief a session DRAFTED on this chain; every link since ended model-free, so its goal / state / next-step structure is the newest there is. The ledger and the raw tail are what changed after it — where they disagree, the newer wins.' \
+          "${_blink:-?}" "$_bage" "$_bbody")
+        if [ -n "$WRAPPED" ]; then
+          WRAPPED=$(printf '%s\n\n%s' "$WRAPPED" "$BRIEF_BLOCK")
+        else
+          WRAPPED="$BRIEF_BLOCK"
+        fi
+      fi
+      ;;
+    *)
+      (umask 077; mkdir -p "${BRIEF_FILE%/*}" && rm -f "$BRIEF_FILE" \
+        && { printf 'link=%s\n' "$_wrote"; printf '%s\n' "$PAYLOAD"; } > "$BRIEF_FILE")
+      ;;
+  esac
+fi
+
+# Where the chain is. Everything injected above is a RENDERING of files that
+# stay on disk — the record, the ledger, the brief, and every predecessor's
+# transcript — and the successor was never told where they are, so a gap in the
+# brief could only be filled by asking the owner. One block, all paths, newest
+# link first, capped so a long chain does not become a wall of paths. Covered
+# by Case AJ.
+CHAIN_BLOCK=""
+if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
+  _links=$(jq -r --arg c "$CHAIN" 'select(.chain == $c) | "\(.n)\t\(.session)"' "$CHAIN_FILE" 2>/dev/null \
+    | sort -rn | head -6)
+  # The root of a chain IS the chain id, and it has no record of its own unless
+  # it was opened with --clean: the record is written on arrival, and nothing
+  # arrived at the root.
+  case "$_links" in
+    *"	$CHAIN"*) ;;
+    *) _links=$(printf '%s\n1\t%s' "$_links" "$CHAIN") ;;
+  esac
+  _tlines=""
+  _oldifs=$IFS
+  IFS='
+'
+  for _l in $_links; do
+    [ -n "$_l" ] || continue
+    _ln=${_l%%	*}
+    _ls=${_l#*	}
+    _lt="(transcript not found)"
+    for _t in "${HOME}"/.claude/projects/*/"${_ls}"*.jsonl; do
+      [ -f "$_t" ] && { _lt="$_t"; break; }
+    done
+    _tlines=$(printf '%s\n    link %-3s %s' "$_tlines" "$_ln" "$_lt")
+  done
+  IFS=$_oldifs
+  _rf="$(dirname "$0")/handoff-retro-filter.py"
+  CHAIN_BLOCK=$(printf '=== CHAIN CONTEXT — this session is link %s of chain %s ===\nEverything above was rendered from files that stay on disk. Read them only when the brief leaves a gap you would otherwise ask the owner to fill.\n  chain record : %s\n                 one JSON line per link (n, slug, session, prev, at)\n  ledger       : %s\n                 every OPEN / CLOSE / TURN event; the block above is its rendering\n  last brief   : %s\n  predecessor transcripts, newest first:%s\nTranscripts are large and stored 0600. Do not read one raw: build a digest first —\n  (umask 077; python3 %s <transcript> > ~/.claude/tmp/handoff-digest-<link>)\n— and read that, or hand it to a subagent on a small model.\n=== END CHAIN CONTEXT ===' \
+    "${N:-1}" "$CHAIN" "$CHAIN_FILE" "${LEDGER_FILE:-(none yet)}" \
+    "$( [ -n "$BRIEF_FILE" ] && [ -f "$BRIEF_FILE" ] && printf '%s' "$BRIEF_FILE" || printf '(none yet)')" \
+    "$_tlines" "$(abspath "$_rf")")
+  if [ -n "$WRAPPED" ]; then
+    WRAPPED=$(printf '%s\n\n%s' "$WRAPPED" "$CHAIN_BLOCK")
+  else
+    WRAPPED="$CHAIN_BLOCK"
+  fi
+fi
+
 # --- predecessor retro -------------------------------------------------------
 #
 # The ledger's write path had one hole, and it was the same hole twice. Deltas
