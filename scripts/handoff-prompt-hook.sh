@@ -10,7 +10,11 @@
 # Optional: jq (falls back to grep/sed if missing, so the trigger never
 # silently no-ops on a machine without jq).
 
-INPUT=$(cat)
+# Guarded like the sibling hook: an unguarded `cat` with a terminal on fd 0
+# blocks forever. Claude Code always pipes the JSON, so this only bites manual
+# or harness invocation — but then it hangs the prompt.
+INPUT=""
+[ -t 0 ] || INPUT=$(cat)
 
 # `printf '%s'`, never `echo`: /bin/sh on macOS (bash with xpg_echo) and dash
 # both interpret backslash escapes in echo, so the JSON's \n became a real
@@ -325,7 +329,7 @@ rm -f "$PAYLOAD_FILE"
 if [ "$PAYLOAD" = "--clean" ]; then
   : # already unlinked
 elif [ -n "$PAYLOAD" ]; then
-  printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE"
+  printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE" || WRITE_FAILED=1
 elif extract_last_turn; then
   # Truncate on a byte budget, and say so. `head -c` / `tail -c` count bytes, so
   # a cut can land mid-UTF-8; the marker sits on its own line, and the next
@@ -347,7 +351,7 @@ elif extract_last_turn; then
 $ASK
 "
   fi
-  printf '%s\n%s%s\n%s\n' "$TAIL_HEADER" "$ASK" "$REPLY_HEADER" "$TAIL" > "$PAYLOAD_FILE"
+  printf '%s\n%s%s\n%s\n' "$TAIL_HEADER" "$ASK" "$REPLY_HEADER" "$TAIL" > "$PAYLOAD_FILE" || WRITE_FAILED=1
 else
   # No transcript, no jq, or a transcript with no completed reply yet. Falls
   # through to the wrapper's existing "arranca limpia" warning rather than
@@ -533,6 +537,14 @@ if [ -n "$CHAIN_FILE" ] || [ -n "$SESSION_ID" ]; then
   else
     printf 'prev=%s\nslug=%s\n' "$SESSION_ID" "$(sanitize_slug "$(chain_slug)")" > "$TITLE_FILE"
   fi
+fi
+
+# A payload that could not be written must not close the session: the wrapper
+# would open a clean one and the context would be gone. Covered by Case X2.
+if [ "${WRITE_FAILED:-0}" = "1" ]; then
+  rm -f "$PAYLOAD_FILE" "$TITLE_FILE" "$MECH_FILE"
+  printf '{"decision":"block","reason":"handoff: could not write the payload under ~/.claude/tmp; nothing was closed."}'
+  exit 0
 fi
 
 touch "$FLAG_FILE"

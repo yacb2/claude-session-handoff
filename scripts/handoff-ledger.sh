@@ -213,10 +213,12 @@ ledger_apply() {
   # `${x%/*}` returns x unchanged when x has no slash, so an unqualified path
   # would have mkdir create a DIRECTORY with the ledger's own name and every
   # append fail afterwards. Only a path with a directory part gets one made.
+  # Non-zero when nothing could be appended: the caller keeps the delta file
+  # on that status, because it is the writer's only copy.
   case "$_ledger" in
-    */*) (umask 077; mkdir -p "${_ledger%/*}") || return 0 ;;
+    */*) (umask 077; mkdir -p "${_ledger%/*}") 2>/dev/null || return 1 ;;
   esac
-  (umask 077; printf '%s' "$_out" >> "$_ledger")
+  (umask 077; printf '%s' "$_out" >> "$_ledger") 2>/dev/null || return 1
 }
 
 # --- render ------------------------------------------------------------------

@@ -631,6 +631,23 @@ ss_run() {
 }
 ss_field() { printf '%s' "$SS_REC" | jq -r "$1 // empty" 2>/dev/null; }
 
+# Case X2 — a payload that could not be written must not close the session. The
+# write's status was ignored and the flag + exit trigger touched regardless, so
+# an unwritable tmp dir killed the session with nothing seeded.
+SANDBOX=$(mktemp -d)
+mkdir -p "$SANDBOX/.claude/tmp"
+chmod 555 "$SANDBOX/.claude/tmp"
+X2_OUT=$(printf '{"prompt":"handoff: keep this","session_id":"S-X2","cwd":"/w/x"}' \
+  | HOME="$SANDBOX" CLAUDE_HANDOFF_ID="4242" sh "$HOOK" 2>/dev/null)
+chmod 755 "$SANDBOX/.claude/tmp"
+if [ ! -f "$SANDBOX/.claude/tmp/handoff-exit-4242" ] && [ ! -f "$SANDBOX/.claude/tmp/handoff-flag-4242" ] \
+  && contains "$X2_OUT" '"decision":"block"'; then
+  ok "X2: a failed payload write leaves the session open and says why"
+else
+  no "X2: the session was closed although the payload was not written (out=[$X2_OUT])"
+fi
+rm -rf "$SANDBOX"
+
 # Case Y — a session start with no title file is not part of a chain, and must
 # write nothing at all. Every ordinary `claude` start hits this path, so a
 # record line here would fill the chain file with noise and a sessionTitle here
@@ -778,6 +795,35 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Case AE2 — `--clean` without stdin still announces itself. CLEAN was only read
+# inside the lineage gate, which needs session_id, so a stdin-less clean start
+# emitted no banner at all — the same silence as the mechanism failing (D3).
+ss_box "clean=1
+slug=fresh" "" ""
+SS_OUT=$(HOME="$SSBOX" PATH="$PATH" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" </dev/null 2>/dev/null)
+if contains "$SS_OUT" "Sesión limpia"; then
+  ok "AE2: a clean start with no stdin still shows the clean banner"
+else
+  no "AE2: clean start without stdin was silent (out=[$SS_OUT])"
+fi
+rm -rf "$SSBOX"
+
+# Case AE3 — a title is emitted only for a link that was actually recorded. The
+# append's status was never checked, so an unwritable chain directory titled the
+# session ↻N with no record behind it — the ↻2, ↻2, ↻2 outcome the design
+# exists to avoid.
+ss_box "prev=SESS-A
+slug=Refactor auth" "a brief" '{"chain":"SESS-A","n":1,"slug":"Refactor auth","session":"SESS-A","prev":"","at":"t"}'
+chmod 444 "$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
+ss_run "SESS-B" "$PATH"
+chmod 644 "$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
+if [ -z "$SS_TITLE" ] && [ "$SS_LINES" -eq 1 ]; then
+  ok "AE3: an append that failed emits no title"
+else
+  no "AE3: title [$SS_TITLE] emitted for a link that was not recorded (lines=$SS_LINES)"
+fi
+rm -rf "$SSBOX"
+
 # Case AF — no stdin at all. The lineage half needs session_id, which only
 # arrives on stdin, so a start without it must degrade to no title and no
 # record — and still seed the payload, which needs nothing from stdin. The
@@ -836,7 +882,7 @@ if contains "$AJ_CTX" "AJ_TAIL_MARKER" \
   && contains "$AJ_CTX" "AJ_CURATED_BRIEF_MARKER" \
   && contains "$AJ_CTX" "=== CHAIN CONTEXT — this session is link 3 of chain SESS-A ===" \
   && contains "$AJ_CTX" "chain record : $SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl" \
-  && contains "$AJ_CTX" "ledger       : $SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-A.ledger" \
+  && contains "$AJ_CTX" "ledger       : (none yet)" \
   && contains "$AJ_CTX" "last brief   : $AJ_BRIEF" \
   && contains "$AJ_CTX" "link 2   $SSBOX/.claude/projects/$SS_KEY/SESS-B.jsonl" \
   && contains "$AJ_CTX" "link 1   $SSBOX/.claude/projects/$SS_KEY/SESS-A.jsonl"; then
