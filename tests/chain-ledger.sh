@@ -463,6 +463,90 @@ else
   printf '%s\n' "$CTX" | tail -20 | sed 's/^/     /'
 fi
 
+# --- Case CL: `--clean` starts a chain with an empty ledger ----------------
+#
+# The ledger gate lacked the CLEAN guard that the brief and CHAIN CONTEXT have,
+# so a delta file left behind by the previous chain was applied to the NEW
+# chain's ledger and rendered under a banner saying nothing was seeded.
+box
+link V1 'chain v' 'OPEN OWED the old chain owed this'
+printf 'OPEN OWED leftover from the old chain\n' > "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
+printf 'NOTE stale pointer\n' > "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID"
+printf 'clean=1\nslug=fresh\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+rm -f "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+OUT=$(printf '{"session_id":"V2","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$CWD" \
+  | HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" sh "$SS_HOOK" 2>/dev/null)
+CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if ! printf '%s' "$CTX" | grep -q 'CHAIN LEDGER' \
+  && [ ! -f "$SANDBOX/.claude/handoff-chains/$(printf '%s' "$CWD" | tr '/' '-').V2.ledger" ] \
+  && [ ! -f "$SANDBOX/.claude/tmp/handoff-ledger-$CHID" ] \
+  && [ ! -f "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID" ]; then
+  ok "CL: --clean renders no ledger, creates none, and consumes the stale delta files"
+else
+  no "CL: --clean leaked the previous chain's deltas into the new chain"
+  printf '%s\n' "$CTX" | grep -n 'LEDGER\|leftover' | sed 's/^/     /'
+fi
+
+# --- Case KD: a delta that could not be recorded is kept ------------------
+#
+# The delta file is the outgoing session's only copy of its deltas. It was
+# removed unconditionally after an apply whose errors were discarded, so an
+# unwritable chain directory deleted the deltas and recorded nothing.
+box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+link W1 'chain w' ''
+chmod 555 "$SANDBOX/.claude/handoff-chains"
+link W2 'chain w' 'OPEN OWED must survive an unwritable ledger'
+chmod 755 "$SANDBOX/.claude/handoff-chains"
+if [ -f "$SANDBOX/.claude/tmp/handoff-ledger-$CHID" ] \
+  && grep -q 'must survive' "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"; then
+  ok "KD: an apply that could not append keeps the delta file"
+else
+  no "KD: the delta file was deleted although nothing was recorded"
+fi
+_rc=0
+sh "$LEDGER_SH" apply "$SANDBOX/nowhere-ro/x.ledger" "$SANDBOX/.claude/tmp/handoff-ledger-$CHID" 1 session >/dev/null 2>&1 || _rc=$?
+mkdir -p "$SANDBOX/nowhere-ro"; chmod 555 "$SANDBOX/nowhere-ro"
+_rc2=0
+sh "$LEDGER_SH" apply "$SANDBOX/nowhere-ro/y.ledger" "$SANDBOX/.claude/tmp/handoff-ledger-$CHID" 1 session >/dev/null 2>&1 || _rc2=$?
+chmod 755 "$SANDBOX/nowhere-ro"
+if [ "$_rc" -eq 0 ] && [ "$_rc2" -ne 0 ]; then
+  ok "KD: apply exits non-zero when it cannot append, zero when it can"
+else
+  no "KD: apply exit status did not report the failed append (rc=$_rc rc2=$_rc2)"
+fi
+
+# --- Case NL: CHAIN CONTEXT names a ledger only when one exists ------------
+#
+# The path was printed unconditionally, so a skill-path chain that had never
+# written a delta was told its ledger lived at a file that was not on disk.
+box
+link X1 'chain x' ''
+link X2 'chain x' ''
+if printf '%s' "$CTX" | grep -q 'ledger       : (none yet)'; then
+  ok "NL: no ledger on disk -> CHAIN CONTEXT says (none yet) instead of a path"
+else
+  no "NL: CHAIN CONTEXT named a ledger file that does not exist"
+  printf '%s\n' "$CTX" | grep 'ledger  ' | sed 's/^/     /'
+fi
+
+# --- Case R1b: the retro is handed what is already open --------------------
+#
+# The digest has the ledger block cut out, so the subagent cannot know what the
+# chain carries and re-opens it in other words (measured: 2 of 3 lines on the
+# first retro'd chain). The open items travel inside the retro instruction.
+retro_box
+link U1 'chain u' 'OPEN OWED decide the widget colour'
+fake_transcript U1
+link U2 'chain u' '' 'NOTE link ended model-free — bare handoff.'
+_retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
+if printf '%s' "$_retro" | grep -q 'd1 *OWED .*decide the widget colour'; then
+  ok "R1b: the retro block carries the open items so the agent does not re-open them"
+else
+  no "R1b: the retro block did not list the chain's open items"
+  printf '%s\n' "$_retro" | sed 's/^/     /' | head -40
+fi
+
 # --- Case R2: a model already wrote the deltas -----------------------------
 retro_box
 link S1 'chain s' ''

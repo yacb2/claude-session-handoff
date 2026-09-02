@@ -176,6 +176,12 @@ Two things about it are worth knowing before you follow it:
   measured 2.8 MB → 56 KB on a real link and 260 MB → 199 KB in 0.4s on the largest
   transcript to hand. Then **one subagent on a small model** reads that digest. The whole
   saving is that you never read the transcript yourself.
+- **Hand it what is already open.** The digest has the ledger block cut out, so the agent
+  cannot know which items the chain already carries and will re-open them in its own words
+  — measured at link 3 of the first retro'd chain: two of three lines it returned were an
+  existing `OWED` restated and a "confirm the test" item the arriving session was about to
+  satisfy itself. The retro block pastes the open items into step 2 for that reason; an
+  `OWED` is a decision the owner has not made, never a task the next session will simply do.
 - **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
   the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
   a real open item permanently — the single thing this mechanism promises cannot happen by
@@ -354,7 +360,7 @@ The `UserPromptSubmit` hook intercepts these before the model runs, so the turn 
 | Typed | Seeds |
 |---|---|
 | `handoff: <text>` | that text, verbatim — the user's own brief |
-| `handoff` | the previous session's last reply, read from the transcript by the hook |
+| `handoff` | the last completed turn — the user's ask and the reply that answered it — read from the transcript by the hook, plus the chain's last curated brief and its file paths |
 | `handoff --clean` | nothing; a genuinely empty session |
 
 Suggest `handoff: <text>` when the user already has the prompt drafted.

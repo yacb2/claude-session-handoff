@@ -68,7 +68,7 @@ hazlo solo cuando de verdad hay bifurcación.
 
 ## Ejecuta el handoff
 
-Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: no alcanza con que `$CLAUDE_HANDOFF_ID` esté seteado. El wrapper la exporta como su propio PID y **todo descendiente la hereda**, incluidas sesiones que el wrapper nunca lanzó ni supervisa (`--fork-session`, `--resume`, un job en background del harness): ahí la variable está seteada y su wrapper ya murió. Lo que distingue "mi wrapper me está mirando" de "acá corrió un wrapper alguna vez" es la ascendencia, así que el bloque recorre la cadena de padres.
+Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: no alcanza con que `$CLAUDE_HANDOFF_ID` esté definida. El wrapper la exporta como su propio PID y **todo descendiente la hereda**, incluidas sesiones que el wrapper nunca lanzó ni supervisa (`--fork-session`, `--resume`, un job en background del harness): ahí la variable está definida y su wrapper ya murió. Lo que distingue "mi wrapper me está mirando" de "aquí corrió un wrapper alguna vez" es la ascendencia, así que el bloque recorre la cadena de padres.
 
 ```sh
 # `test -z`, no `[ -z ]`: the allowed-tools matcher treats `[` as a different
@@ -104,9 +104,16 @@ mkdir -p "$HOME/.claude/tmp"
 # en 0600; el umask por defecto lo escribiría 0644, más legible que su origen.
 umask 077
 
+# Deltas del libro de cadena (chain ledger). Verbos, uno por línea:
+#   OPEN OWED <texto>  decisión que solo el usuario puede tomar, aún sin responder
+#   OPEN RULE <texto>  restricción vigente que el usuario dictó
+#   CLOSE d<n> <cómo>  el item d<n> que mostró el bloque CHAIN LEDGER quedó resuelto
+#   TURN <texto>       el trabajo cambió de rumbo (no es una obligación, nada lo cierra)
+#   CHARTER <texto>    para qué existe la cadena; solo en el primer handoff
+# El detalle está en la sección "The chain ledger" del skill session-handoff.
 # Deltas del libro de cadena. Mismo patrón de dejar un archivo que el payload,
 # y por el mismo motivo: esta sesión no conoce ni su id ni su cadena, así que no
-# puede llavear un libro. El hook de SessionStart — el único lugar donde existe
+# puede indexar un libro. El hook de SessionStart — el único lugar donde existe
 # la identidad de cadena — los aplica. OMITE este cat entero si nada cambió.
 DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
 cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
