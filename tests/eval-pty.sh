@@ -299,8 +299,22 @@ run_one() {
   MARKERS="$FLAG_FILE $PAYLOAD_FILE $EXIT_TRIGGER $ALIVE_FILE $TURN1_FILE $FIRED_FILE"
   rm -f $MARKERS
 
-  CLAUDE_HANDOFF_ID="$HANDOFF_ID" expect <<EXP >"$TURN1_LOG" 2>&1 || true
+  # The variable is set INSIDE expect, from its own pid, not exported from here
+  # with the unit id: the skill's block walks the parent chain and refuses any
+  # id that is not an ancestor's PID (8ffa74a). expect is the spawned claude's
+  # parent and alive for the whole unit, so its pid is both an ancestor and
+  # unique across concurrent units. The skill's flag therefore lands under that
+  # pid, and expect mirrors it onto the per-unit $FLAG_FILE the shell scores.
+  expect <<EXP >"$TURN1_LOG" 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
+    set env(CLAUDE_HANDOFF_ID) [pid]
+    set skill_flag "$TMP_DIR/handoff-flag-[pid]"
+    set skill_files [list \$skill_flag "$TMP_DIR/handoff-payload-[pid]" "$TMP_DIR/handoff-exit-[pid]"]
+    proc flag_seen {} {
+      global skill_flag
+      if {[file exists \$skill_flag]} { exec touch "$FLAG_FILE"; return 1 }
+      return 0
+    }
     # log_user 1, not 0, and expect's stdout is redirected to the turn-1
     # transcript by the caller above. The log_file command was tried first and
     # records NOTHING while log_user is 0 — nine 0-byte files, which the stub
@@ -318,12 +332,12 @@ run_one() {
     set deadline [expr {\$t1 + $TIMEOUT}]
     while {[clock seconds] < \$deadline} {
       expect -timeout 1 -re ".+"
-      if {[file exists "$FLAG_FILE"]} { break }
+      if {[flag_seen]} { break }
     }
     # Record turn 1's outcome POSITIVELY, then declare the run live. Order
     # matters: turn1 before alive means a crash between them still reads as
     # harness-error rather than as a turn-1 miss.
-    if {[file exists "$FLAG_FILE"]} {
+    if {[flag_seen]} {
       exec touch "$TURN1_FILE"
       set fh [open "$FIRED_FILE" w]
       puts \$fh "turn1 [expr {[clock seconds] - \$t1}]"
@@ -337,16 +351,16 @@ run_one() {
     log_user 0
     # Turn 2, only for propose, and only if turn 1 correctly held off.
     # The confirmation is a bare token on purpose — see the note above run_one.
-    if {"$MODE" == "propose" && ![file exists "$FLAG_FILE"]} {
+    if {"$MODE" == "propose" && ![flag_seen]} {
       send -- {ok}
       send -- "\x1b\[13u"
       set t2 [clock seconds]
       set deadline2 [expr {\$t2 + $TIMEOUT}]
       while {[clock seconds] < \$deadline2} {
         expect -timeout 1 -re ".+"
-        if {[file exists "$FLAG_FILE"]} { break }
+        if {[flag_seen]} { break }
       }
-      if {[file exists "$FLAG_FILE"]} {
+      if {[flag_seen]} {
         set fh [open "$FIRED_FILE" w]
         puts \$fh "turn2 [expr {[clock seconds] - \$t2}]"
         close \$fh
@@ -355,6 +369,9 @@ run_one() {
     send -- "/exit"
     send -- "\x1b\[13u"
     expect eof
+    # The skill's own markers carry expect's pid, which the shell never sees;
+    # sweep them here or they outlive the unit under a name nothing else tracks.
+    foreach f \$skill_files { file delete -force \$f }
 EXP
 
   # Classify against the files themselves, then clean up. Carrying each result
