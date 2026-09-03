@@ -50,7 +50,7 @@ This case is narrow by design and does not weaken the one above it: it requires 
 The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it, and the user ends up re-dictating it in every project while sessions still close with "¿lanzo el handoff?".
 
 **Do NOT use** when:
-- The user only wants `/clear` (no context preserved).
+- The user only wants `/clear` (no context preserved). A *narrower* context is still preserved context: "inicia una nueva sesión y discutamos solamente X" asks for a handoff whose brief carries X and nothing else, not for `/clear` — the narrowing is the brief's scope, never the exclusion. And there is no *tool* that opens a session, so a `ToolSearch` for one finding nothing says nothing about this skill; two 2026-09-01 sessions answered "no puedo abrir una sesión nueva" from exactly that lookup while the skill was installed.
 - The conversation is short and `/compact` is enough.
 - The user wants to keep responding in the same session without restarting.
 - The user wants to restart something that is not the Claude Code session — the dev server, docker, a container, a tmux pane, an ssh connection.
