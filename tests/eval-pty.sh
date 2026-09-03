@@ -54,7 +54,12 @@
 # Usage:    ./tests/eval-pty.sh [--query-limit N] [--timeout SECONDS]
 #                               [--eval-set FILE] [--model NAME]
 #                               [--reps N] [--jobs N] [--allow-stale]
-#                               [--resume SESSION_ID]
+#                               [--resume SESSION_ID] [--claude-args "..."]
+#
+# --claude-args passes extra flags to every spawned claude verbatim, e.g.
+# --claude-args "--autocompact 900k": a resumed 198k transcript is otherwise
+# auto-compacted on load, before the query is ever sent, and the unit measures
+# a 0k session while reporting the resumed one.
 #
 # --resume SESSION_ID forks every unit off an EXISTING transcript instead of a
 # fresh session (`claude --resume ID --fork-session`), so a query can be scored
@@ -92,6 +97,7 @@ JOBS=3
 # accident. See the staleness check below.
 ALLOW_STALE=0
 RESUME_ID=""
+CLAUDE_ARGS=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -104,6 +110,7 @@ while [ $# -gt 0 ]; do
     --jobs)        JOBS="$2"; shift 2 ;;
     --allow-stale) ALLOW_STALE=1; shift ;;
     --resume)      RESUME_ID="$2"; shift 2 ;;
+    --claude-args) CLAUDE_ARGS="$2"; shift 2 ;;
     -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
@@ -154,6 +161,7 @@ mkdir -p "$TMP_DIR"
 
 RESUME_ARGS=""
 [ -n "$RESUME_ID" ] && RESUME_ARGS="--resume $RESUME_ID --fork-session"
+RESUME_ARGS="$RESUME_ARGS $CLAUDE_ARGS"
 
 # Settings overlay: pre-approves the bash commands the skill body runs, so we
 # don't need to drive the bypassPermissions dialog and can run in default mode.
@@ -325,7 +333,14 @@ run_one() {
   # parent and alive for the whole unit, so its pid is both an ancestor and
   # unique across concurrent units. The skill's flag therefore lands under that
   # pid, and expect mirrors it onto the per-unit $FLAG_FILE the shell scores.
-  expect <<EXP >"$TURN1_LOG" 2>&1 || true
+  # The driver is usually itself a Claude Code session, and a spawned claude
+  # inherits its markers: CLAUDE_CODE_CHILD_SESSION switches transcript saving
+  # OFF ("Transcript saving is off — inherited ... marker"), which is why no
+  # forked unit ever left a .jsonl to read, and CLAUDE_EFFORT / the restart id
+  # make the unit behave like the driver rather than like the user's terminal.
+  env -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID -u CLAUDE_EFFORT \
+      -u CLAUDE_RESTART_ID -u CLAUDE_HANDOFF_ID \
+      expect <<EXP >"$TURN1_LOG" 2>&1 || true
     set timeout [expr {$TIMEOUT + 30}]
     set env(CLAUDE_HANDOFF_ID) [pid]
     set skill_flag "$TMP_DIR/handoff-flag-[pid]"
@@ -340,7 +355,11 @@ run_one() {
     # records NOTHING while log_user is 0 — nine 0-byte files, which the stub
     # could never have revealed, because the stub is not expect.
     log_user 1
-    spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL $RESUME_ARGS
+    # Braced on purpose: a model name like claude-opus-5[1m] is a Tcl command
+    # substitution unbraced, and [1m] is exactly what a resumed unit needs —
+    # resume keeps the model name but not its context window, so a 198k
+    # transcript compacts on load under the default 200k window.
+    spawn -noecho claude --settings {$SETTINGS_OVERLAY} --model {$MODEL} $RESUME_ARGS
     # Wait for the session to be up before starting the clock, so the measured
     # window is model time and not startup time. A session that never reaches
     # its prompt must NOT fall through and be scored — it exits without
