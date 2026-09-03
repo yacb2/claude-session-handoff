@@ -111,8 +111,7 @@ umask 077
 #   TURN <texto>       el trabajo cambió de rumbo (no es una obligación, nada lo cierra)
 #   CHARTER <texto>    para qué existe la cadena; solo en el primer handoff
 # El detalle está en la sección "The chain ledger" del skill session-handoff.
-# Deltas del libro de cadena. Mismo patrón de dejar un archivo que el payload,
-# y por el mismo motivo: esta sesión no conoce ni su id ni su cadena, así que no
+# Mismo patrón de dejar un archivo que el payload, y por el mismo motivo: esta sesión no conoce ni su id ni su cadena, así que no
 # puede indexar un libro. El hook de SessionStart — el único lugar donde existe
 # la identidad de cadena — los aplica. OMITE este cat entero si nada cambió.
 DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"

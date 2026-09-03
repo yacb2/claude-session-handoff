@@ -14,7 +14,7 @@ This skill closes the current Claude Code session and opens a new one with a han
 
 ## When to use this skill
 
-The front-matter only routes — it decides whether this skill gets surfaced at all. This section is what decides whether to *execute* or to *propose*, and it is authoritative. Do not act on the always-loaded listing alone: the handoff is six lines of Bash and is easy to fire straight from a description, which is exactly how the wrong case gets run.
+The front-matter only routes — it decides whether this skill gets surfaced at all. This section is what decides whether to *execute* or to *propose*, and it is authoritative. Do not act on the always-loaded listing alone: the handoff is one Bash block and is easy to fire straight from a description, which is exactly how the wrong case gets run.
 
 **Direct trigger — execute immediately.** The user explicitly asks for a handoff: hand off this session, start a new session keeping context, restart preserving context, next phase of the plan in a clean session. Claude handles the user's intent across any language they write in; no need to enumerate translations.
 
@@ -23,11 +23,11 @@ The front-matter only routes — it decides whether this skill gets surfaced at 
 - Compaction errors appear in long sessions.
 - The user wants to reload hooks, skills, MCP servers, or pick up a new Claude Code binary version.
 
-**Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly — propose it, summarize what would be seeded, and confirm before running. In practice: a one-line proposal naming what would be seeded (current goal + open thread), then ask if they want it triggered. Only execute after they confirm.
+**Soft signal — propose, do not execute.** When the user drops an idiomatic cue that a fresh session would help — "this chat is getting unwieldy", "we need a fresh start", "I think we should start over" — do not execute the handoff directly — propose it in one line naming what would be seeded (current goal + open thread), then ask if they want it triggered. Only execute after they confirm.
 
 **Asked for the prompt, not for the move — draft it, then offer.** When the user asks for *a prompt* to continue in a new session — "dame un prompt para iniciar una nueva sesión con este contexto", "give me a prompt I can paste into a new session" — what the words request is **text**. Produce it: write the handoff prompt **in the reply, never as a file on disk**, then offer to fire it and execute only if they confirm. Either path works once they do — this skill's Step 2, or having them type `handoff: <the prompt>` themselves (Step 3, zero tokens).
 
-The discriminator is *what the words request*, not what they are about. "Has handoff a una nueva sesión" requests the **action**, and answering it with a document is the failure this skill exists to prevent — it drew verbatim user corrections twice. "Dame un prompt" requests the **text**, and producing it is compliance, not that failure. Both sentences are about moving to a new session; only one asks you to close this one.
+The discriminator is *what the words request*, not what they are about. "Has handoff a una nueva sesión" requests the **action**, and answering it with a document is the failure this skill exists to prevent. "Dame un prompt" requests the **text**, and producing it is compliance, not that failure. Both sentences are about moving to a new session; only one asks you to close this one.
 
 **Tie-break — did they ask, or did they observe?** Check **Do NOT use** first. It wins outright; this tie-break only arbitrates between Direct, Proactive and Soft. An exclusion stays excluded however directly it is asked for — "borrá todo lo de esta conversación y empezamos de cero, no necesito ningún contexto" is a plain imperative, but what it asks for is `/clear`, so it is excluded rather than Direct. Read "asked for it" below as *asked for the handoff*, not as *used the imperative mood*.
 
@@ -47,7 +47,7 @@ This case is narrow by design and does not weaken the one above it: it requires 
 
 **Standing authorization recorded in the project — execute, do not re-ask.** When the project's own CLAUDE.md or memory carries a durable grant — e.g. *"handoff at context threshold without asking"* — the proactive and soft-signal cases escalate to execute: the confirmation was given once, durably, and asking again is exactly the friction the grant exists to remove. The grant's scope is this one move — opening the successor session with the seeded brief. It never extends to publishing, deploying, or anything else the session might also want to do.
 
-The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it: one usage-retro window caught the same user re-dictating this grant seven times in three days across three projects, and sessions still closing with "¿lanzo el handoff?".
+The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it, and the user ends up re-dictating it in every project while sessions still close with "¿lanzo el handoff?".
 
 **Do NOT use** when:
 - The user only wants `/clear` (no context preserved).
@@ -121,13 +121,9 @@ It is not something a previous session re-typed: it is a per-chain file the `Ses
 renders with no model involved, and an item leaves it **only when a `CLOSE` delta closes it**.
 
 That block exists because the brief cannot hold these things. The brief is re-drafted from
-scratch at every hop, so it carries what the outgoing session happened to touch. Measured over
-21 real links on 2026-08-22: a fact survives one hop 33% of the time, and the decay does not
-care whether the fact was allowed to expire — items owed to the user survived **17%**, the worst
-class of all. In one seven-link chain the "Owed by the owner" block travelled links 1 to 4 and
-then vanished at link 5, unclosed and undecided; two links later nothing referenced it. And 6 of
-those 21 links carried no drafted brief at all, because bare `handoff` seeds the transcript tail
-with no model in the loop — so no rule written here can reach them. The ledger can, which is the
+scratch at every hop, so it carries what the outgoing session happened to touch and drops the
+rest — items owed to the user worst of all. And bare `handoff` seeds the transcript tail with no
+model in the loop, so no rule written here can reach those links. The ledger can, which is the
 whole reason it is a file and not a better instruction.
 
 **Do not re-type ledger items into the brief.** They are already carried, and copying them back
@@ -155,17 +151,11 @@ is pinned to. Write `TURN`.
 
 ### The predecessor retro — the links no session could write for
 
-The write path had one hole and it was the same hole twice. Deltas are written by the
-**dying** session, which needs its context live: after an hour away with a cold cache that
-means re-sending the whole conversation to the largest model just to ask what changed. And
-on the bare `handoff` paths no model runs at all — 6 of the 21 measured links.
-
-The fix is a sequence, not a rule. The handoff jumps **first** (free, no model), and the
-**arriving** session — empty context, warm cache by construction — reads its predecessor's
-transcript off disk and writes that link's deltas before it does anything else. The
-objection that the ledger then lags a link dissolves in that order: the retro runs before
-the new session works, so the items land at the same wall-clock moment they otherwise
-would have, written by a session that did not have to pay for them.
+Deltas are written by the **dying** session, which needs its context live — after an hour
+away with a cold cache that means re-sending the whole conversation just to ask what changed
+— and on the bare `handoff` paths no model runs at all. So the handoff jumps **first**, and
+the **arriving** session — empty context, warm cache by construction — reads its
+predecessor's transcript off disk and writes that link's deltas before it does anything else.
 
 When it applies, the `SessionStart` hook injects a `=== PREDECESSOR RETRO ===` block with
 the exact commands. It appears **only** where no model wrote deltas for the previous link;
@@ -173,15 +163,12 @@ where one did, its account is already in hand and a second pass would be a worse
 Two things about it are worth knowing before you follow it:
 
 - **Delegate it.** The digest is built by `handoff-retro-filter.py` — mechanical, no model,
-  measured 2.8 MB → 56 KB on a real link and 260 MB → 199 KB in 0.4s on the largest
-  transcript to hand. Then **one subagent on a small model** reads that digest. The whole
-  saving is that you never read the transcript yourself.
+  under a second even on a very large transcript. Then **one subagent on a small model**
+  reads that digest. The whole saving is that you never read the transcript yourself.
 - **Hand it what is already open.** The digest has the ledger block cut out, so the agent
-  cannot know which items the chain already carries and will re-open them in its own words
-  — measured at link 3 of the first retro'd chain: two of three lines it returned were an
-  existing `OWED` restated and a "confirm the test" item the arriving session was about to
-  satisfy itself. The retro block pastes the open items into step 2 for that reason; an
-  `OWED` is a decision the owner has not made, never a task the next session will simply do.
+  cannot know which items the chain already carries and will re-open them in its own words.
+  The retro block pastes the open items into step 2 for that reason; an `OWED` is a decision
+  the owner has not made, never a task the next session will simply do.
 - **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
   the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
   a real open item permanently — the single thing this mechanism promises cannot happen by
@@ -210,7 +197,7 @@ already showed you. Volatile state, commit SHAs, gate results and next steps do 
 they belong in the brief, where re-verifying them each hop is correct.
 
 **Every handoff writes its deltas.** Nothing changed is a legitimate answer and means writing
-none — but a session that settled an owed item and did not close it leaves the next six links
+none — but a session that settled an owed item and did not close it leaves every later link
 reading a question the user already answered.
 
 Drafting rules:
@@ -219,12 +206,10 @@ Drafting rules:
 - Zero filler, zero obvious explanations.
 - If the user already provided a prompt, use it as-is — do not rewrite it.
 - **State claims about the environment are cheap to re-check and expensive to get wrong —
-  re-check them while drafting.** A brief is a claims artifact nobody verifies on arrival:
-  in one 3-day window an arriving session had to correct its brief on the record ("dijo que
-  'la BD de E2E no se tocó' — eso es falso"), a second brief assumed a UI button that did not
-  exist, and a third scared the user about production over a fixture load. `git status`, a
-  worktree list, a migration check cost seconds at draft time; mark anything not re-checked
-  as ASSUMED so the next session verifies before repeating it to the user as fact.
+  re-check them while drafting.** A brief is a claims artifact nobody verifies on arrival,
+  so a wrong claim about the database, a UI element or production reaches the user as fact.
+  `git status`, a worktree list, a migration check cost seconds at draft time; mark anything
+  not re-checked as ASSUMED so the next session verifies before repeating it.
 
 **Never manufacture a next step to fill that section.** Answer one question — *is the next step
 mine or the user's?* — and write the answer down. A recorded fork is a valid answer; an implicit
@@ -232,16 +217,13 @@ one is not. Both halves of that matter: skipping the section hides a fork the ne
 has to rediscover, and inventing a single step to fill it makes the next session execute a
 decision the user never made.
 
-The failure this prevents, observed: a run ended with its remaining items blocked *by decision*
-and a large batch unpublished — a genuine fork. The brief did not record it, so the new session
-inferred it from an intentless first message and opened with *"'Continue' can mean two very
-different things here"*. Same fork, but blamed on the user's word instead of read off the state.
-Recorded, it opens as *"the next step is your call: A or B"* — the handoff working, not failing.
+Recorded, the next session opens with *"the next step is your call: A or B"*. Unrecorded, it
+opens guessing what *continue* means and blames the user's word for a fork it should have read
+off the state.
 
 **A recorded fork belongs in the ledger, not only in the brief.** `Next concrete step` is
 re-drafted at the next hop and the fork survives exactly as long as some session happens
-to re-type it — measured at 17% per hop, the worst-surviving class there is. `OPEN OWED`
-survives until you answer it. Write it in both if the next step really is the fork; write
+to re-type it. `OPEN OWED` survives until you answer it. Write it in both if the next step really is the fork; write
 it in the ledger regardless.
 
 Watch the quieter route to the same place: instead of skipping the section, the fork gets demoted
@@ -255,10 +237,8 @@ handoff, so they are one turn away. Ask which thread continues, then hand off ne
 answer written in as the single next step — the new session opens executing instead of opening on
 a menu. Recording is the fallback for when asking is impossible, not the default.
 
-**This is the one carve-out to "Direct trigger — execute immediately".** It has to be, or it
-never fires: a Direct request is exactly the case where the user is present, and reading Direct
-as winning outright collapses the carve-out to nothing. Executing is still the default; a live
-fork is the sole reason to spend a turn first.
+**This is the one carve-out to "Direct trigger — execute immediately".** Executing is still
+the default; a live fork is the sole reason to spend a turn first.
 
 Three conditions, all of them: a genuine fork exists; this is a Direct or Proactive handoff the
 user asked for in this conversation; and what you are asking is *which thread continues*. Fail
@@ -346,12 +326,12 @@ touch "$EXIT_TRIGGER"
 
 Read the block's exit status before deciding what to say. Non-zero means it refused and printed
 why: nothing was written, this session is not closing, and staying silent leaves the user watching
-a handoff that never happened — the BL-024 failure. Report the reason in that same turn and stop.
+a handoff that never happened. Report the reason in that same turn and stop.
 
 Only on exit 0, having touched `$EXIT_TRIGGER`, do not emit any more output — the wrapper's watcher
 will close this process within ~0.5s and launch the new session, so anything else is lost anyway.
 
-Why `touch` instead of signalling the wrapper directly: the new sandbox/automode classifier escalates any process-signal primitive regardless of allowlist rules. The wrapper now owns the termination — it spawns a background watcher that polls `$EXIT_TRIGGER` and signals claude. The skill only needs the benign `touch` capability.
+The block ends with `touch`, never a signal: the permission classifier escalates any process-signal primitive regardless of allowlist rules, so the wrapper owns termination through a background watcher that polls `$EXIT_TRIGGER` and signals claude.
 
 ### Step 3 — zero-token alternatives
 
