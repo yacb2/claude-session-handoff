@@ -54,6 +54,15 @@
 # Usage:    ./tests/eval-pty.sh [--query-limit N] [--timeout SECONDS]
 #                               [--eval-set FILE] [--model NAME]
 #                               [--reps N] [--jobs N] [--allow-stale]
+#                               [--resume SESSION_ID]
+#
+# --resume SESSION_ID forks every unit off an EXISTING transcript instead of a
+# fresh session (`claude --resume ID --fork-session`), so a query can be scored
+# at the context it was actually asked in. Fresh sessions never reproduced the
+# BL-029 misses; they happened at 200-300k tokens. Copy the real transcript,
+# truncated just before the failing user turn, under a new uuid into the
+# project's ~/.claude/projects/<dir>/ and run this from that project's cwd.
+# Identical prefixes share the prompt cache, so reps cost one cold read.
 
 set -u
 
@@ -82,6 +91,7 @@ JOBS=3
 # Measuring an installed skill that is not this repo's: legitimate, but never by
 # accident. See the staleness check below.
 ALLOW_STALE=0
+RESUME_ID=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -93,6 +103,7 @@ while [ $# -gt 0 ]; do
     --results-dir) RESULTS_DIR_OVERRIDE="$2"; shift 2 ;;
     --jobs)        JOBS="$2"; shift 2 ;;
     --allow-stale) ALLOW_STALE=1; shift ;;
+    --resume)      RESUME_ID="$2"; shift 2 ;;
     -h|--help)     sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
@@ -140,6 +151,9 @@ if [ "$ALLOW_STALE" = 0 ] && [ -f "$REPO_SKILL" ] && [ -f "$INSTALLED_SKILL" ] \
 fi
 
 mkdir -p "$TMP_DIR"
+
+RESUME_ARGS=""
+[ -n "$RESUME_ID" ] && RESUME_ARGS="--resume $RESUME_ID --fork-session"
 
 # Settings overlay: pre-approves the bash commands the skill body runs, so we
 # don't need to drive the bypassPermissions dialog and can run in default mode.
@@ -326,12 +340,12 @@ run_one() {
     # records NOTHING while log_user is 0 — nine 0-byte files, which the stub
     # could never have revealed, because the stub is not expect.
     log_user 1
-    spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL
+    spawn -noecho claude --settings $SETTINGS_OVERLAY --model $MODEL $RESUME_ARGS
     # Wait for the session to be up before starting the clock, so the measured
     # window is model time and not startup time. A session that never reaches
     # its prompt must NOT fall through and be scored — it exits without
     # touching the liveness marker, which the caller reads as harness-error.
-    expect -timeout 60 -re {auto mode|Welcome back|Try "} {} timeout { exit 3 }
+    expect -timeout 90 -re {auto mode|Welcome back|Try "|❯} {} timeout { exit 3 }
     send -- {$QUERY}
     send -- "\x1b\[13u"
     set t1 [clock seconds]
