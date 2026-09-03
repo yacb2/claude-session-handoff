@@ -61,6 +61,25 @@ else
     Put the note above run_one() instead, outside the heredoc."
 fi
 
+# --- the id handed to the spawned session must be a live ancestor PID ------
+# The skill's block (and handoff-prompt-hook.sh) walk the parent chain and
+# refuse any CLAUDE_HANDOFF_ID that is not an ancestor's PID (8ffa74a,
+# 2026-08-19). The harness used to export a synthetic `eval-$$-N-R`: from that
+# commit on, every unit the model DID execute was rejected by the guard, scored
+# `never-executed`, and reported as a trigger miss. BL-029 spent a 24-unit run
+# on it before the turn-1 transcript showed the rejection line.
+#
+# The only PID that is both an ancestor of the spawned claude and unique per
+# concurrent unit is expect's own, so the heredoc must set the variable from
+# [pid] itself, and no shell line may hand it a different value.
+if printf '%s\n' "$HEREDOC" | grep -q 'set env(CLAUDE_HANDOFF_ID) \[pid\]' \
+   && ! grep -qE '(^|[^_A-Za-z])CLAUDE_HANDOFF_ID=' "$REPO/tests/eval-pty.sh"; then
+  ok "the spawned session gets expect's own pid as CLAUDE_HANDOFF_ID"
+else
+  no "CLAUDE_HANDOFF_ID is not expect's own pid — the skill's ancestry guard rejects
+    a synthetic id, and every executed unit is then scored never-executed."
+fi
+
 # --- the turn-2 confirmation is a measurement-defining constant ------------
 # `propose` is scored by sending this string and checking whether the marker
 # appears afterwards, so its WORDING decides the score. The previous value,
@@ -112,7 +131,7 @@ write_stub() {
   cat > "$SANDBOX/bin/expect" <<'STUB'
 #!/bin/sh
 IN=$(cat)
-pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
+pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-eval-[^\"]*" | head -1; }
 FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
 FIRED=$(pathof fired)
 # The turn-1 transcript is whatever expect writes to STDOUT — the caller
@@ -213,7 +232,7 @@ grep -qE '^# observed fire times \(n=6 of 9 units\): turn1 max 7s · turn2 max 1
 cat > "$SANDBOX/bin/expect" <<'STUB'
 #!/bin/sh
 IN=$(cat)
-pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-[^\"]*" | head -1; }
+pathof() { printf '%s' "$IN" | grep -o "/[^\"]*handoff-$1-eval-[^\"]*" | head -1; }
 FLAG=$(pathof flag); ALIVE=$(pathof alive); TURN1=$(pathof turn1)
 [ -n "$FLAG" ] || exit 0
 touch "$FLAG"; touch "$TURN1"; touch "$ALIVE"
