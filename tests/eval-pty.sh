@@ -60,7 +60,13 @@ set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 EVAL_SET="$REPO/skills/session-handoff/evals/trigger-eval.json"
 TMP_DIR="${HOME}/.claude/tmp"
-PER_QUERY_TIMEOUT=150
+# 360, not the original 150: the skill now reads the chain ledger and the
+# predecessor transcript before it fires, and on 2026-09-03 turn-1 fire times
+# ran 79-135s on Fable and 115-246s on Opus 5. At 150s every Opus unit and
+# half the Fable units were scored never-executed while the model was still
+# working — a timeout miss is indistinguishable from a trigger miss in the
+# report, so the window has to clear the slowest observed fire with margin.
+PER_QUERY_TIMEOUT=360
 QUERY_LIMIT=0  # 0 = no limit
 # Where per-unit results land. Empty means a temp dir cleaned on success; set it
 # to keep them, which is what you want for a run long enough to be interrupted.

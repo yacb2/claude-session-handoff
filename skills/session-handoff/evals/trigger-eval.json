@@ -18,7 +18,7 @@
   {
     "query": "dame un prompt para iniciar una nueva sesión con este contexto. Llevamos largo y quiero seguir en limpio sin perder donde estamos del refactor del auth",
     "expect": "propose",
-    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
+    "why": "asked for the PROMPT, not for the move — the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
   },
   {
     "query": "inicia una nueva sesión limpia para continuar con el siguiente punto del plan, ya cerramos la fase de wrapper unificado y toca arrancar con el smoke test del skill",
@@ -31,7 +31,7 @@
   {
     "query": "dame el prompt para arrancar la fase 2 en una sesión nueva, ya quedó cerrada la fase 1",
     "expect": "propose",
-    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
+    "why": "asked for the PROMPT, not for the move — the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
   },
   {
     "query": "the conversation is getting massive, can you hand this off to a fresh session? we're mid-way through refactoring the auth middleware in src/auth/middleware.ts and there are 3 failing tests we still need to fix",
@@ -48,7 +48,7 @@
   {
     "query": "give me a prompt I can paste into a new session to keep going with the plan, we just finished phase 1 of the migration",
     "expect": "propose",
-    "why": "asked for the PROMPT, not for the move \u2014 the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
+    "why": "asked for the PROMPT, not for the move — the words request text, so the skill drafts it in the reply and executes only on confirmation. Was labelled `execute` and scored 0/3 on 2026-08-06; see backlog/2026-08-06-execute-queries-failing-including-the-tie-break-example.md — BL-022: refers to context a fresh session was never given, so this entry scores the precondition, not the trigger. Turn-1 transcripts show the skill routing correctly and asking for the missing material. Do not diagnose SKILL.md from its score."
   },
   {
     "query": "faça um handoff disso aqui? a sessão tá muito longa e quero recarregar os hooks novos que acabei de instalar do plugin de boilerplate-sync",
@@ -142,5 +142,25 @@
     "query": "Phase 3 of the plan is done and we're near the context limit; the plan's own next step is to hand off before phase 4 — go ahead and do it.",
     "expect": "execute",
     "why": "Restarting something that is not the Claude Code session (a tmux pane)."
+  },
+  {
+    "query": "Vale, hagamos una cosa: inicia una nueva sesión y discutamos solamente lo del hook para tener solo el contexto de lo que te tengo que responder, ok",
+    "expect": "execute",
+    "why": "BL-029: real 2026-09-01 miss (Opus 5, 198k context) answered 'No puedo abrir una sesión nueva yo mismo'. A NARROWER context is still a handoff, not /clear. Like [28], a fresh harness session lacks the referenced context and correctly asks which thread first, so this scores the precondition (1/3 both models on 2026-09-03), not the trigger."
+  },
+  {
+    "query": "¿Te das cuenta de que hiciste lo contrario a lo que te pedí? te pedí que continuaras autónomamente y al final te detuviste aquí desde las 10:52 de la mañana, te detuviste y no hiciste más nada. ¿De qué sirvió todo este tiempo? Vale, al menos comienza a hacerlo ahora. Ya que perdimos estas dos horas prácticamente, inicia una nueva sesión y comienza a ejecutar todo",
+    "expect": "execute",
+    "why": "BL-029: real 2026-09-01 miss (Opus 5, 282k context) — the model executed the work in place and ignored the handoff clause buried after a scolding. Harness 2026-09-03: Opus 2/3, Fable 3/3."
+  },
+  {
+    "query": "Ok, let's do this: start a new session and let's only discuss the hook thing, so you have just the context of what I need to answer you, ok",
+    "expect": "execute",
+    "why": "BL-029 English pair of the narrowed-context phrasing; same precondition caveat as its Spanish twin (0/3 both models on 2026-09-03, every rep asked which hook)."
+  },
+  {
+    "query": "Do you realize you did the opposite of what I asked? I asked you to keep going autonomously and you stopped here at 10:52 and did nothing else. What was all this time for? Fine, at least start doing it now. Since we basically lost two hours, start a new session and start executing everything",
+    "expect": "execute",
+    "why": "BL-029 English pair of the buried-clause phrasing. Harness 2026-09-03: Opus 3/3, Fable 3/3."
   }
 ]
