@@ -262,6 +262,9 @@ never about whether to hand off, and never twice.
 ### Step 2 — execute
 
 With the payload ready, run via Bash. Both checks are part of the block, not notes above it.
+Run the block inside the sandbox first: if it answers that `ps` cannot run, rerun it once with
+`dangerouslyDisableSandbox: true` — the ancestry walk needs the process tree, and the sandbox hides
+it. That is the only reason to disable the sandbox here, and the block tells you when it applies.
 
 The first is the one you can guess: unset, every path below still runs and writes
 `handoff-payload-`, `handoff-flag-` and `handoff-exit-` with an empty suffix — files no wrapper is
@@ -275,6 +278,13 @@ walks the parent chain.
 ```sh
 if [ -z "$CLAUDE_HANDOFF_ID" ]; then
   echo "handoff: wrapper not detected. Launch claude via the shell function that claude-session-handoff installs." >&2
+  exit 1
+fi
+
+# The Bash tool's sandbox cannot exec ps (rc 127) and denies kill -0 too, so
+# the walk below would see an empty chain and blame the wrapper. Say which it is.
+if ! ps -o ppid= -p $$ >/dev/null 2>&1; then
+  echo "handoff: ps cannot run here, so the wrapper cannot be verified (the Bash tool's sandbox hides the process tree). Nothing was written. Rerun this block with dangerouslyDisableSandbox: true." >&2
   exit 1
 fi
 

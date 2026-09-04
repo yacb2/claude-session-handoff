@@ -79,6 +79,13 @@ if test -z "$CLAUDE_HANDOFF_ID"; then
   exit 1
 fi
 
+# El sandbox de la herramienta Bash no puede ejecutar ps (rc 127) y también
+# niega kill -0: el recorrido vería una cadena vacía y culparía al wrapper.
+if ! ps -o ppid= -p $$ >/dev/null 2>&1; then
+  printf '%s\n' "handoff: ps no puede correr aquí, así que no se puede verificar el wrapper (el sandbox de la herramienta Bash oculta el árbol de procesos). No se escribió nada. Vuelve a ejecutar este bloque con dangerouslyDisableSandbox: true." >&2
+  exit 1
+fi
+
 # Mismo chequeo que is_wrapper_ancestor() en handoff-prompt-hook.sh, escrito
 # con las palabras de comando que allowed-tools declara: una variable seteada
 # solo prueba que hubo un wrapper arriba en el árbol, no que el mío siga vivo.
