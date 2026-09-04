@@ -1157,6 +1157,25 @@ for WHICH in skill cmd; do
   else
     no "O: $WHO broke the supervised path (rc=$B_RC sentinels=$B_SENTINELS wrote=[$B_NAMES] out=$B_OUT)"
   fi
+
+  # Case AK — the Bash tool's sandbox refuses to exec ps at all (rc 127,
+  # "operation not permitted"), and kill -0 is denied too, so the walk has no
+  # way to see the tree. Before this case the guard swallowed that failure,
+  # saw an empty chain, and refused a genuinely wrapped session as "not an
+  # ancestor" — a wrong diagnosis that sent the model to give up on a handoff
+  # that works with the sandbox off. The block must say ps is the problem
+  # and name the fix, and still write nothing.
+  P_STUB=$(mktemp -d)
+  printf '#!/bin/sh\nexit 127\n' > "$P_STUB/ps"
+  chmod +x "$P_STUB/ps"
+  run_block "PATH=$P_STUB:\$PATH; $BLOCK" "$TEST_PID"
+  rm -rf "$P_STUB"
+  if [ "$B_RC" -ne 0 ] && [ "$B_LEAKED" = 0 ] && contains "$B_OUT" "sandbox" \
+      && ! contains "$B_OUT" "ancestor" && ! contains "$B_OUT" "ancestro"; then
+    ok "AK: $WHO names the sandbox when ps cannot run, instead of a stale wrapper"
+  else
+    no "AK: $WHO misdiagnoses an unrunnable ps (rc=$B_RC leaked=$B_LEAKED out=$B_OUT)"
+  fi
 done
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
