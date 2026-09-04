@@ -364,7 +364,21 @@ run_one() {
     # window is model time and not startup time. A session that never reaches
     # its prompt must NOT fall through and be scored — it exits without
     # touching the liveness marker, which the caller reads as harness-error.
-    expect -timeout 90 -re {auto mode|Welcome back|Try "|❯} {} timeout { exit 3 }
+    # A resumed transcript that is old and large opens on a picker ("Resume
+    # from summary (recommended) / Resume full session as-is"), and its ❯
+    # cursor matched the readiness pattern below: on 2026-09-04 the query was
+    # typed into the picker and Enter took the summary, so two units measured
+    # a summarised session and the query never reached the model. Answer it
+    # with option 2 first — a unit exists to score the full context — and only
+    # then wait for the prompt, on markers the picker cannot show.
+    expect -timeout 90 \
+      -re {Resume from summary} {
+        send -- "2"
+        send -- "\x1b\[13u"
+        expect -timeout 90 -re {auto mode|Welcome back|Try "|Tip:} {} timeout { exit 3 }
+      } \
+      -re {auto mode|Welcome back|Try "|❯} {} \
+      timeout { exit 3 }
     send -- {$QUERY}
     send -- "\x1b\[13u"
     set t1 [clock seconds]
