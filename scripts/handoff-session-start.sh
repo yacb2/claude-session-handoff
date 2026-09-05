@@ -30,6 +30,26 @@ fi
 PAYLOAD_FILE="${HOME}/.claude/tmp/handoff-payload-${WRAPPER_ID}"
 TITLE_FILE="${HOME}/.claude/tmp/handoff-title-${WRAPPER_ID}"
 
+# The session marker: which session is running under this wrapper. Read BEFORE
+# it is overwritten, because at this moment it still names the PREVIOUS session
+# — the one that just handed off — and that is the predecessor the skill path
+# cannot name for itself (a session does not know its own id, but the hook that
+# started it did). Written on EVERY start, ordinary ones included: a resumed
+# session (Ctrl+R, `claude --resume`) starts under a new wrapper without ever
+# being recorded as a link, and "the last link this wrapper recorded" then
+# finds nothing and opens a new chain with an empty prev, orphaning the old
+# chain's ledger (BL-031). Covered by hook-guard.sh Cases AL, AL2, AL3.
+SESSION_MARKER="${HOME}/.claude/tmp/handoff-session-${WRAPPER_ID}"
+MARKER_PREV=""
+[ -f "$SESSION_MARKER" ] && MARKER_PREV=$(head -1 "$SESSION_MARKER" 2>/dev/null | tr -d '\000-\037')
+if command -v jq >/dev/null 2>&1; then
+  _sid=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+  if [ -n "$_sid" ]; then
+    mkdir -p "${HOME}/.claude/tmp" 2>/dev/null
+    printf '%s\n' "$_sid" > "$SESSION_MARKER" 2>/dev/null
+  fi
+fi
+
 # Every ordinary `claude` start lands here. It must write nothing at all — no
 # title, no record — or the chain file fills with noise and sessions this tool
 # never handed off get renamed. Covered by hook-guard.sh Case Y.
@@ -52,9 +72,10 @@ fi
 
 # The skill path writes the payload with its own Bash block and never passes
 # through the UserPromptSubmit hook, so it leaves no title file — and it cannot
-# name a predecessor either, because a session does not know its own id. What it
-# CAN do is say what the chain is called, and it already knows: the brief opens
-# with a `slug:` line (SKILL.md Step 1). That single instruction is what puts
+# name a predecessor either, because a session does not know its own id; the
+# session marker above supplies that. What it CAN do is say what the chain is
+# called, and it already knows: the brief opens with a `slug:` line (SKILL.md
+# Step 1). That single instruction is what puts
 # every skill-driven handoff — interactive or unattended — on a chain, without
 # restating the protocol in each `aidex-*` skill that mandates the step.
 #
@@ -140,10 +161,13 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
   else
     # The skill path writes the payload directly and cannot know its own
     # session id, so it leaves `prev` empty. Under one wrapper sessions run
-    # strictly one after another, so the last link this wrapper recorded IS the
-    # predecessor. Known limitation, same family as the ancestor check in the
+    # strictly one after another, so the session the marker named when this
+    # hook started IS the predecessor — recorded as a link or not (BL-031).
+    # The record lookup stays as the fallback for a marker that predates this
+    # hook version. Known limitation, same family as the ancestor check in the
     # sibling hook: a recycled wrapper PID in the same project inherits a
     # stranger's ordinal. Cosmetic, and the record shows it.
+    [ -z "$PREV" ] && PREV="$MARKER_PREV"
     if [ -z "$PREV" ] && [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ]; then
       PREV=$(jq -r --arg w "$WRAPPER_ID" 'select(.wrapper == $w) | .session // empty' \
         "$CHAIN_FILE" 2>/dev/null | tail -1)

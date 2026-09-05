@@ -795,6 +795,70 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Case AL — BL-031: the skill path after a RESUME. Case AE finds the predecessor
+# as "the last link this wrapper recorded", which is wrong the moment a session
+# is resumed (Ctrl+R, `claude --resume`) under a new wrapper: the resumed link
+# was recorded under the OLD wrapper, so the lookup finds nothing and the hook
+# opens a new chain with an empty prev — and the old chain's ledger is orphaned.
+# Seen 2026-09-04: chain 2b2e33f2's charter and d2 RULE survived only because
+# the outgoing brief re-typed them by hand.
+#
+# The fix is a marker the hook writes for itself on EVERY start — the session
+# id under this wrapper — and reads back, before overwriting it, when a
+# skill-written brief arrives with no prev. Under one wrapper sessions run one
+# after another, so whatever the marker holds at that moment is the predecessor,
+# recorded or not.
+ss_box "" "slug: Plan exec — phase 3
+## Current goal
+finish the migration" '{"chain":"c9","n":2,"slug":"Plan exec — phase 2","session":"SESS-A","prev":"SESS-0","wrapper":"27308","at":"2026-08-19T10:00:00Z"}'
+printf '%s\n' "SESS-A" > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+ss_run "SESS-SKILL" "$PATH"
+if [ "$SS_TITLE" = "↻3 · Plan exec — phase 3" ] \
+  && [ "$(ss_field .prev)" = "SESS-A" ] && [ "$(ss_field .chain)" = "c9" ] \
+  && [ "$(ss_field .n)" = "3" ]; then
+  ok "AL: a skill handoff from a resumed session stays on its chain via the session marker"
+else
+  no "AL: resumed skill handoff opened a new chain (title=[$SS_TITLE] rec=[$SS_REC])"
+fi
+if [ "$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)" = "SESS-SKILL" ]; then
+  ok "AL: the marker now names this session, for the next handoff to read"
+else
+  no "AL: marker not updated ([$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)])"
+fi
+rm -rf "$SSBOX"
+
+# Case AL2 — the marker names a session no chain ever recorded (a plain `claude`
+# session that then handed off through the skill). That session was link 1 by
+# definition, so this one is link 2 and the chain is named after it — the
+# branch Case U covers for the title-file path, now reachable from the skill
+# path too. Before, this opened a chain with n=1 and an empty prev.
+ss_box "" "slug: First skill handoff
+## Current goal
+x" ""
+printf '%s\n' "SESS-R" > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+ss_run "SESS-SKILL2" "$PATH"
+if [ "$(ss_field .prev)" = "SESS-R" ] && [ "$(ss_field .chain)" = "SESS-R" ] \
+  && [ "$(ss_field .n)" = "2" ] && [ "$SS_TITLE" = "↻2 · First skill handoff" ]; then
+  ok "AL2: an unrecorded predecessor in the marker makes this link 2 of a chain named after it"
+else
+  no "AL2: unrecorded predecessor ignored (title=[$SS_TITLE] rec=[$SS_REC])"
+fi
+rm -rf "$SSBOX"
+
+# Case AL3 — every ordinary start writes the marker and nothing else. Case Y
+# already pins "no title, no record"; this pins the one write that path now
+# makes, because a start that skipped it would hide the NEXT handoff's
+# predecessor — the resumed-session case AL exists for.
+ss_box "" "" ""
+ss_run "SESS-ORDINARY" "$PATH"
+if [ "$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)" = "SESS-ORDINARY" ] \
+  && [ -z "$SS_TITLE" ] && [ "$SS_LINES" = 0 ] && [ ! -d "$SSBOX/.claude/handoff-chains" ]; then
+  ok "AL3: an ordinary start records its session id in the marker and writes nothing else"
+else
+  no "AL3: ordinary start did not leave the marker (title=[$SS_TITLE] lines=$SS_LINES marker=[$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)])"
+fi
+rm -rf "$SSBOX"
+
 # Case AE2 — `--clean` without stdin still announces itself. CLEAN was only read
 # inside the lineage gate, which needs session_id, so a stdin-less clean start
 # emitted no banner at all — the same silence as the mechanism failing (D3).
