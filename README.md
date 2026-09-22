@@ -150,6 +150,7 @@ recorded name to keep.
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`
 - [jq](https://jqlang.github.io/jq/)
 - Shell: **zsh**, **bash**, or **fish**
+- **Claude Code CLI only, not Claude Code Desktop.** Desktop does not start `claude` through your shell, so the `claude()` wrapper function never runs.
 
 ## Install
 
@@ -160,6 +161,8 @@ cd claude-session-handoff
 ```
 
 The installer is **idempotent**. Sandbox testing is supported via `CLAUDE_DIR`, `RC_FILE_OVERRIDE`, and `SHELL_NAME_OVERRIDE` environment variables.
+
+The installer only writes the `claude()` function to your shell rc file; it does not reload your shell for you. Open a new terminal, or source your rc file (e.g. `source ~/.zshrc`), before the `claude` function takes effect. The installer's closing message says the same.
 
 ### What the installer does
 
@@ -228,7 +231,7 @@ variants each need a different sequence per emulator.
 
 ## Limitations
 
-- **Requires the wrapper — all three paths, not just the hook**: handoff works only in a session the `claude()` shell function actually launched. The hook, `/handoff` and the skill each verify that `$CLAUDE_HANDOFF_ID` names a wrapper that is an **ancestor** of the current process, and refuse with a reason otherwise. A set variable is not enough: the wrapper exports its own PID and every descendant inherits it, so a `--fork-session`, a `--resume` or a background job carries the id of a wrapper that has already exited. Before this check those sessions wrote payload, flag and exit under that dead id and reported success, and — since PIDs recycle — could SIGTERM an unrelated live wrapper's session. Started Claude from an IDE integration that calls the binary directly? None of the three will hand off; start a terminal session instead.
+- **Requires the wrapper — all three paths, not just the hook**: handoff works only in a session the `claude()` shell function actually launched. The hook, `/handoff` and the skill each verify that `$CLAUDE_HANDOFF_ID` names a wrapper that is an **ancestor** of the current process, and refuse with a reason otherwise. A set variable is not enough: the wrapper exports its own PID and every descendant inherits it, so a `--fork-session`, a `--resume` or a background job carries the id of a wrapper that has already exited. Before this check those sessions wrote payload, flag and exit under that dead id and reported success, and — since PIDs recycle — could SIGTERM an unrelated live wrapper's session. Started Claude from an IDE integration that calls the binary directly? None of the three will hand off; start a terminal session instead. The same applies to Claude Code Desktop: it launches `claude` directly rather than through your shell, so the wrapper is never in the picture.
 - **Ancestry is not identity**: a nested `claude` started *without* the wrapper still has the outer wrapper in its ancestor chain, so the check passes for it and the handoff signals the outer session. Closing this needs a per-invocation token from the wrapper, which the shared-wrapper protocol makes expensive; the check is still strictly better than accepting any non-empty value.
 - **Strict match on the hook**: the UserPromptSubmit hook fires only on `handoff` or `handoff: ...` at the start of the prompt (case-insensitive).
 - **Bare `handoff` needs `jq` and a completed reply**: the transcript tail is parsed with `jq`, and the extraction takes the last assistant line carrying no tool call. Without `jq`, without a `transcript_path`, or on a session that never produced a reply, the handoff still fires and falls back to a clean session.
