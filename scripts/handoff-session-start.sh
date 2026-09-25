@@ -65,8 +65,21 @@ if [ -z "$PAYLOAD" ] && [ ! -f "$TITLE_FILE" ]; then
   exit 0
 fi
 
-WRAPPED=""
+# `mode: idle` in the brief's head: the outgoing session handed itself off while
+# the owner was away (handoff-idle-cache.sh woke it before its cache expired).
+# The wrapper still kicks the successor off with `continue`, which here is
+# nobody's instruction, so the opening shows the brief and waits instead of
+# resuming. Covered by hook-guard.sh Case AM.
+PAYLOAD_MODE=""
 if [ -n "$PAYLOAD" ]; then
+  PAYLOAD_MODE=$(printf '%s\n' "$PAYLOAD" | head -5 \
+    | sed -n 's/^[[:space:]]*[Mm]ode:[[:space:]]*//p' | head -1 | tr -d '\000-\037 ')
+fi
+
+WRAPPED=""
+if [ -n "$PAYLOAD" ] && [ "$PAYLOAD_MODE" = "idle" ]; then
+  WRAPPED=$(printf '=== HANDOFF FROM PREVIOUS SESSION ===\n%s\n=== END HANDOFF ===\n\nYou are starting a fresh session. The text above is the handoff brief from the previous session — treat it as authoritative context.\n\nIMPORTANT — opening behavior (idle handoff):\nThe previous session handed itself off while the owner was away, before its prompt cache expired. The first message ("continue") was sent by the wrapper, not typed by the owner. Reply with a one-line acknowledgement in the owner'"'"'s language that this is a handoff made during inactivity, then show the brief to the owner as it stands, every section, then one line saying you are waiting for their instruction. Take NO tool action and do not start the next step until the owner writes.' "$PAYLOAD")
+elif [ -n "$PAYLOAD" ]; then
   WRAPPED=$(printf '=== HANDOFF FROM PREVIOUS SESSION ===\n%s\n=== END HANDOFF ===\n\nYou are starting a fresh session. The text above is the handoff brief from the previous session — treat it as authoritative context.\n\nIMPORTANT — opening behavior:\nOn the user'"'"'s very first message in this session (whatever it is, even "hola", "continue", or an unrelated question), you MUST begin your reply with a one-line acknowledgement in the user'"'"'s language indicating that this is a fresh session seeded from a previous handoff, followed by a one-sentence summary of the handoff brief. Example: "Handoff recibido — vengo de la sesión previa con: <resumen de 1 frase>." Then address the user'"'"'s message normally, resuming from where the previous session left off based on the brief.' "$PAYLOAD")
 fi
 
@@ -557,7 +570,9 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
   fi
 fi
 
-if [ -n "$PAYLOAD" ]; then
+if [ -n "$PAYLOAD" ] && [ "$PAYLOAD_MODE" = "idle" ]; then
+  BANNER="↻ Handoff por inactividad — la sesión previa se cerró antes de perder la caché. Claude mostrará el brief y esperará tus instrucciones."
+elif [ -n "$PAYLOAD" ]; then
   PAYLOAD_BYTES=$(printf '%s' "$PAYLOAD" | wc -c | tr -d ' ')
   BANNER="↻ Handoff recibido — sesión nueva sembrada con ${PAYLOAD_BYTES} bytes de la sesión previa. Cuando escribas, Claude abrirá confirmando el handoff."
 elif [ "$CLEAN" = "1" ]; then

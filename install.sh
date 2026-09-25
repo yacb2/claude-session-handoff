@@ -420,12 +420,18 @@ settings_apply() {
 # so a command registered under one event suppressed its registration under
 # another, and any incidental occurrence of the string counted as a hit.
 hook_registered() {
-  jq -e --arg ev "$1" --arg cmd "$2" --arg m "$3" '
-    (.hooks[$ev] // []) | any(((.matcher // "") == $m) and (.hooks | any(.command == $cmd)))
+  _x="${4:-}"
+  [ -n "$_x" ] || _x='{}'
+  jq -e --arg ev "$1" --arg cmd "$2" --arg m "$3" --argjson x "$_x" '
+    (.hooks[$ev] // []) | any(((.matcher // "") == $m) and (.hooks | any(.command == $cmd and contains($x))))
   ' "$SETTINGS_FILE" >/dev/null 2>&1
 }
 
-# add_hook EVENT COMMAND [MATCHER]
+# add_hook EVENT COMMAND [MATCHER] [EXTRA_JSON]
+#
+# EXTRA_JSON is merged into the hook object — `{"async":true,"asyncRewake":true}`
+# for the idle-cache hook. An install whose entry lacks the extras is migrated
+# like one that lacks the matcher.
 #
 # MATCHER scopes the group. SessionStart fires for startup, resume, clear,
 # compact and fork, and an omitted matcher activates the group on ALL of them —
@@ -438,19 +444,20 @@ hook_registered() {
 # from ever reaching an existing install. Removal is per-hook, so an unrelated
 # hook sharing the group survives.
 add_hook() {
-  EVENT="$1"; CMD="$2"; MATCHER="${3:-}"
+  EVENT="$1"; CMD="$2"; MATCHER="${3:-}"; EXTRA="${4:-}"
+  [ -n "$EXTRA" ] || EXTRA='{}'
   ensure_settings
-  if hook_registered "$EVENT" "$CMD" "$MATCHER"; then
+  if hook_registered "$EVENT" "$CMD" "$MATCHER" "$EXTRA"; then
     info "$EVENT hook '$CMD' already configured (skipped)"
     return
   fi
-  settings_apply --arg cmd "$CMD" --arg ev "$EVENT" --arg m "$MATCHER" '
+  settings_apply --arg cmd "$CMD" --arg ev "$EVENT" --arg m "$MATCHER" --argjson x "$EXTRA" '
     .hooks = ((.hooks // {}) | .[$ev] = (
       ((.[$ev] // [])
         | map(.hooks |= map(select(.command != $cmd)))
         | map(select((.hooks | length) > 0)))
       + [ (if $m == "" then {} else {matcher: $m} end)
-          + {hooks: [{type: "command", command: $cmd}]} ]
+          + {hooks: [{type: "command", command: $cmd} + $x]} ]
     ))
   '
   info "$EVENT hook '$CMD' added"
@@ -492,6 +499,7 @@ install() {
 
   atomic_install "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-idle-cache.sh" "$SCRIPTS_DIR/handoff-idle-cache.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-ledger.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-retro-filter.py" "$SCRIPTS_DIR/handoff-retro-filter.py" 755
   info "Handoff hook scripts installed"
@@ -520,6 +528,9 @@ install() {
   # resume and fork. UserPromptSubmit has no such reason to filter on.
   add_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh" startup
   add_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
+  # Async: it sleeps ~54 min after every Stop. asyncRewake: exit 2 wakes the
+  # idle session with the hook's stderr, before the prompt cache expires.
+  add_hook Stop "$CLAUDE_REF/scripts/handoff-idle-cache.sh" "" '{"async":true,"asyncRewake":true}'
 
   echo ""
   echo "  Done! Open a new terminal and run 'claude' to start."
@@ -539,6 +550,7 @@ uninstall() {
   echo ""
 
   rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" \
+    "$SCRIPTS_DIR/handoff-idle-cache.sh" \
     "$SCRIPTS_DIR/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-retro-filter.py"
   info "Handoff hook scripts removed"
 
@@ -566,6 +578,7 @@ uninstall() {
 
   remove_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh"
   remove_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
+  remove_hook Stop "$CLAUDE_REF/scripts/handoff-idle-cache.sh"
 
   # Remove shared wrapper only if no other tool registered.
   if [ -f "$WRAPPER_PATH" ] && [ -n "$RC_FILE" ] && [ -f "$RC_FILE" ]; then

@@ -1242,5 +1242,43 @@ for WHICH in skill cmd; do
   fi
 done
 
+# Case AM — an idle-cache handoff (`mode: idle` in the brief's head) is written
+# while the owner is away, and the wrapper still kicks the successor off with
+# `continue`. That word is nobody's instruction: the successor must show the
+# brief and wait, not start the next step. The ordinary opening stays the same
+# for every other brief, and the mode line must not leak into the slug.
+ss_box "" "slug: Idle chain
+mode: idle
+## Current goal
+keep going" ""
+ss_run "SESS-IDLE" "$PATH"
+AM_CTX=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+AM_MSG=$(printf '%s' "$SS_OUT" | jq -r '.systemMessage // empty' 2>/dev/null)
+if contains "$AM_CTX" "Take NO tool action" && contains "$AM_CTX" "show the brief" \
+    && ! contains "$AM_CTX" "resuming from where the previous session left off" \
+    && contains "$AM_MSG" "inactividad"; then
+  ok "AM: an idle brief opens by showing the brief and waiting"
+else
+  no "AM: idle brief opens like any other (ctx=[$(printf '%s' "$AM_CTX" | tail -c 300)] msg=[$AM_MSG])"
+fi
+if [ "$(ss_field .slug)" = "Idle chain" ]; then
+  ok "AM: the mode line does not leak into the slug"
+else
+  no "AM: slug polluted ([$(ss_field .slug)])"
+fi
+rm -rf "$SSBOX"
+ss_box "" "slug: Busy chain
+## Current goal
+keep going" ""
+ss_run "SESS-BUSY" "$PATH"
+AM2_CTX=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if contains "$AM2_CTX" "resuming from where the previous session left off" \
+    && ! contains "$AM2_CTX" "Take NO tool action"; then
+  ok "AM: a brief without the mode line keeps the ordinary opening"
+else
+  no "AM: ordinary opening changed"
+fi
+rm -rf "$SSBOX"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

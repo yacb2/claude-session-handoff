@@ -38,6 +38,7 @@ promptask|\*\*Asked for the prompt
 tiebreak|\*\*Tie-break
 mandated|\*\*Mandated by a running process
 standing|\*\*Standing authorization recorded in the project
+idle|\*\*Idle cache expiry
 donot|\*\*Do NOT use\*\*'
 
 # --- extract the two regions ----------------------------------------------

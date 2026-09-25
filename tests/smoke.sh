@@ -77,6 +77,8 @@ assert "SessionStart handoff hook"       'grep -q handoff-session-start.sh "$CLA
 assert "SessionStart capture hook"       'grep -q capture-session-id.sh "$CLAUDE_DIR/settings.json"'
 assert "UserPromptSubmit handoff hook"   'grep -q handoff-prompt-hook.sh "$CLAUDE_DIR/settings.json"'
 assert "UserPromptSubmit restart hook"   'grep -q restart-hook.sh "$CLAUDE_DIR/settings.json"'
+assert "Stop idle-cache hook is async + asyncRewake" \
+  'jq -e "(.hooks.Stop // []) | any(.hooks | any((.command | test(\"handoff-idle-cache\")) and .async == true and .asyncRewake == true))" "$CLAUDE_DIR/settings.json" >/dev/null'
 
 # --- Case 2: reverse order ---
 echo "Case 2: restart then handoff"

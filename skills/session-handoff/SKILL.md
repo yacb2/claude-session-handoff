@@ -45,9 +45,11 @@ A question that asks for *options* rather than for the handoff — "is there ano
 
 This case is narrow by design and does not weaken the one above it: it requires an unattended run to be **in flight**. A conversational session never qualifies, no matter how long it has run or how clearly a fresh session would help — there, the soft-signal rule still applies and you propose first, unless the project records a standing authorization (next case).
 
-**Standing authorization recorded in the project — execute, do not re-ask.** When the project's own CLAUDE.md or memory carries a durable grant — e.g. *"handoff at context threshold without asking"* — the proactive and soft-signal cases escalate to execute: the confirmation was given once, durably, and asking again is exactly the friction the grant exists to remove. The grant's scope is this one move — opening the successor session with the seeded brief. It never extends to publishing, deploying, or anything else the session might also want to do.
+**Standing authorization recorded in the project — execute, do not re-ask.** When the project's own CLAUDE.md or memory, or a user-level rule in `~/.claude/rules/` (which covers every project), carries a durable grant — e.g. *"handoff at context threshold without asking"* — the proactive and soft-signal cases escalate to execute: the confirmation was given once, durably, and asking again is exactly the friction the grant exists to remove. The grant's scope is this one move — opening the successor session with the seeded brief. It never extends to publishing, deploying, or anything else the session might also want to do.
 
 The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it, and the user ends up re-dictating it in every project while sessions still close with "¿lanzo el handoff?".
+
+**Idle cache expiry — execute under a standing grant, otherwise one line.** A system reminder tagged `[handoff-idle]` means `handoff-idle-cache.sh` woke this session: it has sat idle ~54 minutes at depth, and its prompt cache expires at 60, after which the owner's next message re-writes the whole context. Nobody is at the keyboard, so never ask. Hand off only when a standing authorization (the case above) covers this session **and** the handoff is safe: no subagent running (its hand-back would reach a dead session), no question to the owner still unanswered, and your own uncommitted work named path by path in the brief. Put `mode: idle` as the brief's second line, under `slug:`: the successor then shows the brief and waits instead of acting on the wrapper's automatic `continue`. Any condition missing: end the turn with one line and nothing else — the hook wakes a session once per idle period, so doing nothing costs one cache read.
 
 **Do NOT use** when:
 - The user only wants `/clear` (no context preserved). A *narrower* context is still preserved context: "inicia una nueva sesión y discutamos solamente X" asks for a handoff whose brief carries X and nothing else, not for `/clear` — the narrowing is the brief's scope, never the exclusion. And there is no *tool* that opens a session, so a `ToolSearch` for one finding nothing says nothing about this skill; two 2026-09-01 sessions answered "no puedo abrir una sesión nueva" from exactly that lookup while the skill was installed.
@@ -98,7 +100,7 @@ name it as such: the options, what each costs, and what is already verified>
 <what the next session would trample if it didn't know>
 ```
 
-**The `slug:` line names the chain, and it is the only line the mechanism reads.** The
+**The `slug:` line names the chain, and it is the only line the mechanism reads** — besides `mode: idle`, which only the idle-cache case writes. The
 `SessionStart` hook takes it from the first five lines of the brief, prefixes the ordinal it
 reads off `~/.claude/handoff-chains/`, and that becomes the session's title in the `--resume`
 picker: `↻3 · Refactor auth`. Without it the new session is auto-titled after its first prompt —
