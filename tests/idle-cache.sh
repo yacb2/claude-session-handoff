@@ -115,6 +115,21 @@ else
   no "6: woke a session that cannot hand off"
 fi
 
+# 7. state files of sessions long gone do not pile up: one arm file per session
+#    ever run, so the hook prunes its own files older than 7 days on every Stop.
+mkdir -p "$BOX/.claude/tmp"
+touch -t 202601010000 "$BOX/.claude/tmp/handoff-idle-arm-OLD" "$BOX/.claude/tmp/handoff-idle-woke-OLD"
+touch "$BOX/.claude/tmp/handoff-other-OLD"
+touch -t 202601010000 "$BOX/.claude/tmp/handoff-other-OLD"
+transcript 120000
+fire S7
+if [ ! -e "$BOX/.claude/tmp/handoff-idle-arm-OLD" ] && [ ! -e "$BOX/.claude/tmp/handoff-idle-woke-OLD" ] \
+    && [ -e "$BOX/.claude/tmp/handoff-other-OLD" ] && [ -e "$BOX/.claude/tmp/handoff-idle-arm-S7" ]; then
+  ok "7: stale idle state is pruned, other files and fresh state are kept"
+else
+  no "7: pruning wrong ($(ls "$BOX/.claude/tmp" | tr '\n' ' '))"
+fi
+
 rm -rf "$BOX"
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

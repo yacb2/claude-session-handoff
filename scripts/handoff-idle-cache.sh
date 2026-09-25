@@ -33,6 +33,8 @@ TP=$(printf '%s' "$IN" | jq -r '.transcript_path // empty' 2>/dev/null)
 
 DIR="$HOME/.claude/tmp"
 mkdir -p "$DIR" 2>/dev/null || exit 0
+# One arm file per session ever run; prune this hook's own state after a week.
+find "$DIR" -maxdepth 1 -name 'handoff-idle-*' -mtime +7 -delete 2>/dev/null
 ARM="$DIR/handoff-idle-arm-$SID"    # token of this session's newest Stop
 WOKE="$DIR/handoff-idle-woke-$SID"  # last real prompt when the session was woken
 
