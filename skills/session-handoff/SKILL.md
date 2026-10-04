@@ -171,8 +171,11 @@ Drafting rules:
 - **State claims about the environment are cheap to re-check and expensive to get wrong —
   re-check them while drafting.** A brief is a claims artifact nobody verifies on arrival,
   so a wrong claim about the database, a UI element or production reaches the user as fact.
-  `git status`, a worktree list, a migration check cost seconds at draft time; mark anything
-  not re-checked as ASSUMED so the next session verifies before repeating it.
+  A worktree list, a migration check cost seconds at draft time; mark anything not re-checked
+  as ASSUMED so the next session verifies before repeating it. Skip the git re-check for the
+  repo you are in: the successor starts with Claude Code's own `gitStatus` of it. That
+  covers the cwd's repo only, so a nested repo or another worktree the brief names is still
+  re-checked.
 
 **Never manufacture a next step to fill that section.** Answer one question — *is the next step
 mine or the user's?* — and write the answer down. A recorded fork is a valid answer; an implicit
