@@ -1194,6 +1194,45 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Case AJ2 — one session id with a transcript in two project dirs resolves to
+# the NEWER file, in CHAIN CONTEXT and in the retro alike: the path the reader is
+# told to digest must be the one the retro digests. SESS-B's newer copy sorts
+# first and SESS-A's sorts last, so neither a first-match nor a last-match
+# resolver passes (BL-042: kept while the per-id globs became one pass).
+ss_box "prev=SESS-A
+slug=Two dirs" "slug: Two dirs
+## Goal
+AJ2_BRIEF" ""
+mkdir -p "$SSBOX/.claude/projects/-a-proj" "$SSBOX/.claude/projects/-b-proj"
+AJ2_A="$SSBOX/.claude/projects/-a-proj"
+AJ2_B="$SSBOX/.claude/projects/-b-proj"
+: > "$AJ2_A/SESS-A.jsonl"; touch -t 202001010000 "$AJ2_A/SESS-A.jsonl"
+: > "$AJ2_B/SESS-A.jsonl"; touch -t 202101010000 "$AJ2_B/SESS-A.jsonl"
+: > "$AJ2_A/SESS-B.jsonl"; touch -t 202101010000 "$AJ2_A/SESS-B.jsonl"
+: > "$AJ2_B/SESS-B.jsonl"; touch -t 202001010000 "$AJ2_B/SESS-B.jsonl"
+ss_run "SESS-B" "$PATH"
+# Link 2 of a chain whose root was never recorded: no chain file yet, so no
+# CHAIN CONTEXT, and the retro resolves its predecessor on its own.
+AJ2_CTX1=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+printf 'prev=SESS-B\nslug=Two dirs\n' > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"
+printf '[RAW TRANSCRIPT TAIL — NOT a curated handoff brief]\n--- last reply ---\n| x\n' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-C" "$PATH"
+AJ2_CTX=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+if contains "$AJ2_CTX1" "'$AJ2_B/SESS-A.jsonl' > " \
+  && ! contains "$AJ2_CTX1" "CHAIN CONTEXT" \
+  && contains "$AJ2_CTX" "link 2   $AJ2_A/SESS-B.jsonl" \
+  && contains "$AJ2_CTX" "link 1   $AJ2_B/SESS-A.jsonl" \
+  && contains "$AJ2_CTX" "PREDECESSOR RETRO" \
+  && contains "$AJ2_CTX" "'$AJ2_A/SESS-B.jsonl' > " \
+  && ! contains "$AJ2_CTX" "$AJ2_B/SESS-B.jsonl" \
+  && ! contains "$AJ2_CTX" "$AJ2_A/SESS-A.jsonl"; then
+  ok "AJ2: an id in two project dirs resolves to the newer transcript in CHAIN CONTEXT and the retro"
+else
+  no "AJ2: an older transcript was named, or none"
+  printf '%s\n' "$AJ2_CTX1" "$AJ2_CTX" | grep jsonl | sed 's/^/     /'
+fi
+rm -rf "$SSBOX"
+
 # Case AN — `handoff <words>` without a colon is an instruction to the next
 # session, not a brief. It used to be written verbatim, so the transcript tail
 # was dropped and the chain's curated brief overwritten with a one-liner (7 of

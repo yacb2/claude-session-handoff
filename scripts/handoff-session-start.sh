@@ -169,12 +169,36 @@ NEWCHAIN=$(title_field new)
 # Shared by CHAIN CONTEXT and the retro. Newest mtime, never the glob's first
 # match: one session id can resolve to more than one .jsonl, and the path the
 # reader is told to digest must be the one the retro digests.
+#
+# Every id either consumer needs is found in ONE pass (resolve_transcripts),
+# because a glob per id read every project directory once per link: ~0.25 s of
+# each start on a ~700-project tree under bash's sh (BL-042). find_transcript
+# then picks from that list. -H follows a symlinked project dir as the glob
+# did, and each id is escaped so `-name` matches it literally, as the quoted
+# glob did. Covered by hook-guard.sh Case AJ2.
+TRANSCRIPTS=""
+resolve_transcripts() {
+  _ids=$1
+  set --
+  while IFS= read -r _id; do
+    [ -n "$_id" ] || continue
+    set -- "$@" -o -name "$(printf '%s' "$_id" | sed 's/[][*?\\]/\\&/g')*.jsonl"
+  done <<EOF
+$_ids
+EOF
+  [ "$#" -gt 0 ] || return 0
+  shift
+  find -H "${HOME}"/.claude/projects/* -mindepth 1 -maxdepth 1 \( "$@" \) 2>/dev/null
+}
 find_transcript() {
   _found=""
-  for _t in "${HOME}"/.claude/projects/*/"$1"*.jsonl; do
+  while IFS= read -r _t; do
+    case "${_t##*/}" in "$1"*.jsonl) ;; *) continue ;; esac
     [ -f "$_t" ] || continue
     if [ -z "$_found" ] || [ "$_t" -nt "$_found" ]; then _found="$_t"; fi
-  done
+  done <<EOF
+$TRANSCRIPTS
+EOF
   printf '%s' "$_found"
 }
 RETRO_FILTER="${HANDOFF_RETRO_FILTER:-$(dirname "$0")/handoff-retro-filter.py}"
@@ -512,6 +536,7 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ "${C
     *"	$CHAIN"*) ;;
     *) _links=$(printf '%s\n1\t%s' "$_links" "$CHAIN") ;;
   esac
+  TRANSCRIPTS=$(resolve_transcripts "$(printf '%s\n' "$_links" | cut -f2; printf '%s\n' "${PREV:-}")")
   _tlines=""
   _oldifs=$IFS
   IFS='
@@ -570,6 +595,7 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
     # transcript directory slug and the chain-store slug are NOT the same
     # mapping — one folds `_` to `-` and the other does not — and both
     # spellings exist on disk for the same project.
+    [ -n "$CHAIN_BLOCK" ] || TRANSCRIPTS=$(resolve_transcripts "$PREV")
     RETRO_TRANSCRIPT=$(find_transcript "$PREV")
     if [ -n "$RETRO_TRANSCRIPT" ]; then
       # Absolute, always. Both script paths come off `dirname "$0"`, which is
