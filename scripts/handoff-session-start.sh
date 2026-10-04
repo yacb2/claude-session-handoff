@@ -365,8 +365,8 @@ MECH_FILE="${HOME}/.claude/tmp/handoff-ledger-mech-${WRAPPER_ID}"
 # retro below: where a model already wrote the deltas, running one again would
 # pay for a worse copy of what is in hand.
 # A non-empty file is not a recorded delta. The skill path hands a model a
-# heredoc whose default body is the literal placeholder
-# `<ONE DELTA PER LINE — ... — OR OMIT THIS BLOCK ENTIRELY>`; emitted
+# template whose default delta line is the literal placeholder
+# `<ONE DELTA PER LINE — ... — OR DROP THE LINE ABOVE AND THIS ONE>`; emitted
 # unsubstituted it leaves a file that is non-empty and that `ledger_apply`
 # discards line by line. Nothing is recorded AND the retro that would have
 # recovered it is suppressed — the worst of both. So this is provisional, and

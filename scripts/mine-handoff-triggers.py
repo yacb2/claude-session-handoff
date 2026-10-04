@@ -54,7 +54,7 @@ REFUSAL = re.compile(
 )
 PROPOSAL = re.compile(r"\?|¿", re.S)
 CORRECTION = re.compile(r"tienes un skill|te ped[ií]|sigues sin|no tienes|otra vez|again|\bhand\s?off\b|sesi[oó]n|session", re.I)
-FIRED = re.compile(r"handoff-flag-|EXIT_TRIGGER|handoff-payload-|handoff-exit-")
+FIRED = re.compile(r"handoff-flag-|EXIT_TRIGGER|handoff-payload-|handoff-exit-|handoff-fire\.sh")
 
 
 def text_of(msg):

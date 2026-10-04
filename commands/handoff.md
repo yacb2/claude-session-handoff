@@ -63,83 +63,33 @@ abre con un menú. Registrarla es el fallback para cuando preguntar no se puede.
 Pregunta **una sola vez**, y solo sobre **qué hilo sigue** — nunca sobre si hacer el handoff.
 "Una sola vez" es cómo preguntas, no cuán bifurcado está el estado: varias decisiones abiertas
 no son varias preguntas ni descalifican preguntar, son **una** pregunta con varias opciones.
-Tocar `$EXIT_TRIGGER` cierra la sesión en ~0.5s, así que preguntar pospone el handoff un turno:
+Disparar el handoff cierra la sesión en ~0.5s, así que preguntar pospone el handoff un turno:
 hazlo solo cuando de verdad hay bifurcación.
 
 ## Ejecuta el handoff
 
-Con el payload listo, escríbelo al archivo de payload, crea el flag, y toca el archivo de exit-trigger. **Importante**: no alcanza con que `$CLAUDE_HANDOFF_ID` esté definida. El wrapper la exporta como su propio PID y **todo descendiente la hereda**, incluidas sesiones que el wrapper nunca lanzó ni supervisa (`--fork-session`, `--resume`, un job en background del harness): ahí la variable está definida y su wrapper ya murió. Lo que distingue "mi wrapper me está mirando" de "aquí corrió un wrapper alguna vez" es la ascendencia, así que el bloque recorre la cadena de padres.
+Con el payload listo, llama a `handoff-fire.sh`: verifica que el wrapper te está mirando, escribe el payload y los deltas, crea el flag y toca el exit-trigger. **Importante**: no alcanza con que `$CLAUDE_HANDOFF_ID` esté definida. El wrapper la exporta como su propio PID y **todo descendiente la hereda**, incluidas sesiones que el wrapper nunca lanzó ni supervisa (`--fork-session`, `--resume`, un job en background del harness): ahí la variable está definida y su wrapper ya murió. Lo que distingue "mi wrapper me está mirando" de "aquí corrió un wrapper alguna vez" es la ascendencia, y el script recorre la cadena de padres. Si dice que `ps` no puede correr (el sandbox de la herramienta Bash oculta el árbol de procesos), vuelve a ejecutarlo una vez con `dangerouslyDisableSandbox: true`.
+
+stdin es el payload. Una línea que sea exactamente `__HANDOFF_DELTA__` lo termina: lo que sigue son los deltas del libro de cadena (chain ledger), uno por línea, y va al archivo de deltas:
+
+```
+OPEN OWED <texto>  decisión que solo el usuario puede tomar, aún sin responder
+OPEN RULE <texto>  restricción vigente que el usuario dictó
+CLOSE d<n> <cómo>  el item d<n> que mostró el bloque CHAIN LEDGER quedó resuelto
+TURN <texto>       el trabajo cambió de rumbo (no es una obligación, nada lo cierra)
+CHARTER <texto>    para qué existe la cadena; solo en el primer handoff
+```
+
+El detalle está en la sección "The chain ledger" del skill session-handoff. OMITE la línea `__HANDOFF_DELTA__` y todo lo que sigue si nada cambió.
 
 ```sh
-# `test -z`, no `[ -z ]`: the allowed-tools matcher treats `[` as a different
-# command word from `test`, and only `test` is declared. Same reason `printf`
-# stands in for `echo` below.
-if test -z "$CLAUDE_HANDOFF_ID"; then
-  printf '%s\n' "handoff: no se detectó el wrapper. Lanza claude vía la función del shell que instala claude-session-handoff." >&2
-  exit 1
-fi
-
-# El sandbox de la herramienta Bash no puede ejecutar ps (rc 127) y también
-# niega kill -0: el recorrido vería una cadena vacía y culparía al wrapper.
-if ! ps -o ppid= -p $$ >/dev/null 2>&1; then
-  printf '%s\n' "handoff: ps no puede correr aquí, así que no se puede verificar el wrapper (el sandbox de la herramienta Bash oculta el árbol de procesos). No se escribió nada. Vuelve a ejecutar este bloque con dangerouslyDisableSandbox: true." >&2
-  exit 1
-fi
-
-# Mismo chequeo que is_wrapper_ancestor() en handoff-prompt-hook.sh, escrito
-# con las palabras de comando que allowed-tools declara: una variable seteada
-# solo prueba que hubo un wrapper arriba en el árbol, no que el mío siga vivo.
-is_wrapper_ancestor() {
-  _pid=$$
-  while _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' '); test -n "$_pid"; do
-    case "$_pid" in
-      0|1) return 1 ;;
-    esac
-    test "$_pid" = "$CLAUDE_HANDOFF_ID" && return 0
-  done
-  return 1
-}
-
-if ! is_wrapper_ancestor; then
-  printf '%s\n' "handoff: el wrapper PID $CLAUDE_HANDOFF_ID no es ancestro de esta sesión (variable heredada o stale). No se escribió nada y esta sesión no se va a cerrar." >&2
-  exit 1
-fi
-
-mkdir -p "$HOME/.claude/tmp"
-
-# El payload es contenido de la conversación. Claude Code guarda los transcripts
-# en 0600; el umask por defecto lo escribiría 0644, más legible que su origen.
-umask 077
-
-# Deltas del libro de cadena (chain ledger). Verbos, uno por línea:
-#   OPEN OWED <texto>  decisión que solo el usuario puede tomar, aún sin responder
-#   OPEN RULE <texto>  restricción vigente que el usuario dictó
-#   CLOSE d<n> <cómo>  el item d<n> que mostró el bloque CHAIN LEDGER quedó resuelto
-#   TURN <texto>       el trabajo cambió de rumbo (no es una obligación, nada lo cierra)
-#   CHARTER <texto>    para qué existe la cadena; solo en el primer handoff
-# El detalle está en la sección "The chain ledger" del skill session-handoff.
-# Mismo patrón de dejar un archivo que el payload, y por el mismo motivo: esta sesión no conoce ni su id ni su cadena, así que no
-# puede indexar un libro. El hook de SessionStart — el único lugar donde existe
-# la identidad de cadena — los aplica. OMITE este cat entero si nada cambió.
-DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
-cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
-<UN DELTA POR LÍNEA — OPEN / CLOSE / TURN / CHARTER — U OMITE ESTE BLOQUE ENTERO>
-__HANDOFF_DELTA_EOF__
-
-PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
-FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
-EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"
-
-# Escribe el payload usando un heredoc con delimitador único para evitar
-# expansión de variables y conflictos con comillas dentro del prompt.
-cat > "$PAYLOAD_FILE" <<'__HANDOFF_PAYLOAD_EOF__'
+sh "$HOME/.claude/scripts/handoff-fire.sh" <<'__HANDOFF_EOF__'
 <EL PROMPT DE HANDOFF VA AQUÍ>
-__HANDOFF_PAYLOAD_EOF__
-
-touch "$FLAG_FILE"
-touch "$EXIT_TRIGGER"
+__HANDOFF_DELTA__
+<UN DELTA POR LÍNEA — OPEN / CLOSE / TURN / CHARTER — O QUITA LA LÍNEA DE ARRIBA Y ESTA>
+__HANDOFF_EOF__
 ```
 
 Mira el exit status del bloque antes de decidir qué decir. Distinto de cero significa que se negó y ya imprimió por qué: no se escribió nada, esta sesión no se cierra, y quedarte callado deja al usuario mirando un handoff que nunca ocurrió. Reporta el motivo en ese mismo turno y para.
 
-Solo con exit 0, después de tocar `$EXIT_TRIGGER`, no agregues más output — el watcher del wrapper detecta el archivo en ~0.5s, manda SIGTERM a claude, y levanta la sesión nueva.
+Solo con exit 0 no agregues más output — el watcher del wrapper detecta el archivo en ~0.5s, manda SIGTERM a claude, y levanta la sesión nueva.

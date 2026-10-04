@@ -75,6 +75,12 @@ assert "registered-by contains handoff"  '[ "$(registered_by "$RC_FILE" | grep -
 assert "registered-by contains restart"  '[ "$(registered_by "$RC_FILE" | grep -c claude-restart)" -eq 1 ]'
 assert "SessionStart handoff hook"       'grep -q handoff-session-start.sh "$CLAUDE_DIR/settings.json"'
 assert "SessionStart capture hook"       'grep -q capture-session-id.sh "$CLAUDE_DIR/settings.json"'
+# BL-041: the one fire script the skill and /handoff both call is installed
+# executable, and an atomic reinstall (temp + mv) leaves it intact.
+FIRE="$CLAUDE_DIR/scripts/handoff-fire.sh"
+assert "handoff-fire.sh installed executable" '[ -x "$FIRE" ] && cmp -s "$FIRE" "$REPO_HANDOFF/scripts/handoff-fire.sh"'
+run_handoff
+assert "handoff-fire.sh survives a reinstall" '[ -x "$FIRE" ] && cmp -s "$FIRE" "$REPO_HANDOFF/scripts/handoff-fire.sh" && ! ls "$CLAUDE_DIR/scripts" | grep -q "\.new\."'
 assert "UserPromptSubmit handoff hook"   'grep -q handoff-prompt-hook.sh "$CLAUDE_DIR/settings.json"'
 assert "UserPromptSubmit restart hook"   'grep -q restart-hook.sh "$CLAUDE_DIR/settings.json"'
 assert "Stop idle-cache hook is async + asyncRewake" \
@@ -154,10 +160,13 @@ HOOK="$CLAUDE_DIR/scripts/handoff-prompt-hook.sh"
 assert "wrapper defines HANDOFF_EXIT sentinel"  'grep -q "HANDOFF_EXIT=" "$WRAP"'
 assert "wrapper has run_claude helper"          'grep -q "^run_claude()" "$WRAP"'
 assert "wrapper watcher signals SIGTERM"        'grep -q "kill -TERM \"\$CLAUDE_PID\"" "$WRAP"'
-assert "skill uses touch \$EXIT_TRIGGER"        'grep -q "touch \"\$EXIT_TRIGGER\"" "$SKILL"'
+FIRE="$CLAUDE_DIR/scripts/handoff-fire.sh"
+assert "fire script uses touch \$EXIT_TRIGGER"   'grep -q "touch \"\$EXIT_TRIGGER\"" "$FIRE"'
+assert "skill calls the fire script"            'grep -q "handoff-fire.sh" "$SKILL"'
 assert "skill no longer kills PPID"             '! grep -q "kill -TERM \$PPID" "$SKILL"'
-assert "slash command uses touch trigger"       'grep -q "touch \"\$EXIT_TRIGGER\"" "$CMD"'
+assert "slash command calls the fire script"    'grep -q "handoff-fire.sh" "$CMD"'
 assert "slash command no longer kills PPID"     '! grep -q "kill -TERM \$PPID" "$CMD"'
+assert "fire script no longer kills PPID"       '! grep -q "kill -TERM \$PPID" "$FIRE"'
 assert "slash command drops kill from allowed-tools" '! grep -q "Bash(kill" "$CMD"'
 assert "hook uses touch trigger"                'grep -q "touch \"\$EXIT_TRIGGER\"" "$HOOK"'
 assert "hook no longer kills PPID"              '! grep -q "kill -TERM \$PPID" "$HOOK"'

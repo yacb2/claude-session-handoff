@@ -1408,13 +1408,21 @@ SKILL_BLOCK=$(awk '
   inblock            { print }
 ' "$SKILL_MD")
 
+# BL-041: the block now calls the installed script, so a sandbox HOME has to
+# carry it where the block looks (and *.sh is not a sentinel: see run_block).
+stage_fire() {
+  mkdir -p "$1/.claude/scripts"
+  cp "$REPO/scripts/handoff-fire.sh" "$1/.claude/scripts/handoff-fire.sh"
+}
+
 if [ -z "$SKILL_BLOCK" ]; then
   no "L: could not extract the Step 2 runnable block from SKILL.md"
 else
   L_HOME=$(mktemp -d)
+  stage_fire "$L_HOME"
   L_OUT=$(HOME="$L_HOME" CLAUDE_HANDOFF_ID="" sh -c "$SKILL_BLOCK" 2>&1)
   L_RC=$?
-  L_LEAKED=$(find "$L_HOME" -name 'handoff-*' 2>/dev/null | wc -l | tr -d ' ')
+  L_LEAKED=$(find "$L_HOME" -name 'handoff-*' ! -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
   rm -rf "$L_HOME"
 
   if [ "$L_RC" -ne 0 ]; then
@@ -1451,7 +1459,7 @@ CMD_BLOCK=$(awk '
 # substitution, and a class of only [;&| ] silently skips it — the check then
 # reports on the words that happen to be pipeline-adjacent and no others.
 M_MISSING=""
-for W in test printf mkdir cat touch umask ps tr; do
+for W in sh; do
   printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|(\`[:space:]])$W([[:space:]]|$)" || continue
   case "$ALLOWED" in
     *"Bash($W:"*) ;;
@@ -1493,12 +1501,13 @@ fi
 # control positive: a guard that refuses everything would pass N alone.
 run_block() {
   B_HOME=$(mktemp -d)
+  stage_fire "$B_HOME"
   B_OUT=$(HOME="$B_HOME" CLAUDE_HANDOFF_ID="$2" sh -c "$1" 2>&1)
   B_RC=$?
-  B_LEAKED=$(find "$B_HOME" -name 'handoff-*' 2>/dev/null | wc -l | tr -d ' ')
+  B_LEAKED=$(find "$B_HOME" -name 'handoff-*' ! -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
   # Names, not just the count: Case O asserts WHICH sentinels were written, and
   # the sandbox is gone by the time it looks.
-  B_NAMES=$(find "$B_HOME" -name 'handoff-*' -exec basename {} \; 2>/dev/null | sort | tr '\n' ' ')
+  B_NAMES=$(find "$B_HOME" -name 'handoff-*' ! -name '*.sh' -exec basename {} \; 2>/dev/null | sort | tr '\n' ' ')
   rm -rf "$B_HOME"
 }
 
@@ -1739,6 +1748,105 @@ run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R5/sub" '.cwd=$c')" "$TEST
 if contains "$PAYLOAD_OUT" "- sub/b.txt"; then ok "BL037: a cwd-relative write from a subdirectory is listed under its repo path"
 else no "BL037: subdirectory cwd (out=[$PAYLOAD_OUT])"; fi
 
+
+# Cases FIRE — BL-041: handoff-fire.sh splits stdin on the first whole line
+# `__HANDOFF_DELTA__`: before it is the payload, after it the chain-ledger delta.
+# Layer: script integration (real script, sandbox HOME, real ancestry walk).
+fire() {
+  F_HOME=$(mktemp -d)
+  F_OUT=$(printf '%s' "$1" | HOME="$F_HOME" CLAUDE_HANDOFF_ID="$TEST_PID" sh "$REPO/scripts/handoff-fire.sh" 2>&1)
+  F_RC=$?
+  F_D="$F_HOME/.claude/tmp"
+  F_PAYLOAD=$(cat "$F_D/handoff-payload-$TEST_PID" 2>/dev/null)
+  F_DELTA=$(cat "$F_D/handoff-ledger-$TEST_PID" 2>/dev/null)
+  F_HAS_PAYLOAD=0; [ -f "$F_D/handoff-payload-$TEST_PID" ] && F_HAS_PAYLOAD=1
+  F_HAS_DELTA=0; [ -f "$F_D/handoff-ledger-$TEST_PID" ] && F_HAS_DELTA=1
+  F_SENT=0
+  [ -f "$F_D/handoff-flag-$TEST_PID" ] && [ -f "$F_D/handoff-exit-$TEST_PID" ] && F_SENT=1
+  F_MODE=$(ls -l "$F_D/handoff-payload-$TEST_PID" 2>/dev/null | cut -c1-10)
+  F_DMODE=$(ls -l "$F_D/handoff-ledger-$TEST_PID" 2>/dev/null | cut -c1-10)
+  rm -rf "$F_HOME"
+}
+NL='
+'
+fire "slug: S
+## Goal
+x
+__HANDOFF_DELTA__
+OPEN OWED ask
+TURN pivot
+"
+if [ "$F_RC" = 0 ] && [ "$F_SENT" = 1 ] && [ "$F_PAYLOAD" = "slug: S${NL}## Goal${NL}x" ] \
+   && [ "$F_DELTA" = "OPEN OWED ask${NL}TURN pivot" ] && [ "$F_MODE" = "-rw-------" ] && [ "$F_DMODE" = "-rw-------" ]; then
+  ok "FIRE: lines after the separator reach the delta file, the rest the payload, both 0600"
+else no "FIRE: split (rc=$F_RC sent=$F_SENT payload=[$F_PAYLOAD] delta=[$F_DELTA] modes=$F_MODE/$F_DMODE out=$F_OUT)"; fi
+
+fire "brief that mentions __HANDOFF_DELTA__ mid-line
+and  __HANDOFF_DELTA__ at the end
+"
+if [ "$F_HAS_DELTA" = 0 ] && contains "$F_PAYLOAD" "mid-line" && contains "$F_PAYLOAD" "at the end"; then
+  ok "FIRE: the separator literal mid-line does not split"
+else no "FIRE: mid-line separator split the brief (delta=$F_HAS_DELTA payload=[$F_PAYLOAD])"; fi
+
+# Contract: a whole-line separator splits wherever it appears, fences included.
+# The split is textual on purpose; the brief's author must not put the line alone
+# on a line of quoted text.
+fire "intro
+\`\`\`
+__HANDOFF_DELTA__
+\`\`\`
+"
+if [ "$F_HAS_DELTA" = 1 ] && [ "$F_PAYLOAD" = "intro${NL}\`\`\`" ]; then
+  ok "FIRE: a whole-line separator splits wherever it appears, inside a fence too"
+else no "FIRE: whole-line separator no longer splits inside a fence (delta=$F_HAS_DELTA payload=[$F_PAYLOAD])"; fi
+
+fire "brief
+__HANDOFF_DELTA__
+TURN a
+__HANDOFF_DELTA__
+TURN b
+"
+if [ "$F_PAYLOAD" = "brief" ] && [ "$F_DELTA" = "TURN a${NL}__HANDOFF_DELTA__${NL}TURN b" ]; then
+  ok "FIRE: only the first separator splits; a later one is delta text"
+else no "FIRE: second separator (payload=[$F_PAYLOAD] delta=[$F_DELTA])"; fi
+
+fire "brief only
+__HANDOFF_DELTA__
+"
+if [ "$F_RC" = 0 ] && [ "$F_SENT" = 1 ] && [ "$F_HAS_DELTA" = 0 ] && [ "$F_PAYLOAD" = "brief only" ]; then
+  ok "FIRE: an empty delta section writes no delta file (pinned)"
+else no "FIRE: empty delta section (rc=$F_RC delta_file=$F_HAS_DELTA payload=[$F_PAYLOAD])"; fi
+
+fire "brief with no separator
+"
+if [ "$F_HAS_DELTA" = 0 ] && [ "$F_PAYLOAD" = "brief with no separator" ]; then
+  ok "FIRE: no separator means payload only"
+else no "FIRE: no-separator brief (delta=$F_HAS_DELTA payload=[$F_PAYLOAD])"; fi
+
+# An empty payload would seed a successor with nothing and still close this
+# session: refuse before any touch.
+for _v in "" "__HANDOFF_DELTA__
+OPEN OWED x
+" "   
+
+"; do
+  fire "$_v"
+  if [ "$F_RC" != 0 ] && [ "$F_SENT" = 0 ] && [ -z "$F_PAYLOAD" ] && [ "$F_HAS_DELTA" = 0 ] && [ "$F_HAS_PAYLOAD" = 0 ]; then
+    ok "FIRE: a brief with no non-blank line is refused and leaves nothing"
+  else no "FIRE: empty payload went through (rc=$F_RC sent=$F_SENT payload=[$F_PAYLOAD] delta=$F_HAS_DELTA file=$F_HAS_PAYLOAD)"; fi
+done
+
+# The separator is compared after trimming [ \t\r], like handoff-ledger.sh does
+# for delta lines.
+for _sep in "__HANDOFF_DELTA__  " "   __HANDOFF_DELTA__" "	__HANDOFF_DELTA__" "__HANDOFF_DELTA__$(printf '\r')"; do
+  fire "brief
+${_sep}
+TURN a
+"
+  if [ "$F_PAYLOAD" = "brief" ] && [ "$F_DELTA" = "TURN a" ]; then
+    ok "FIRE: a whitespace/CRLF variant of the separator splits"
+  else no "FIRE: separator variant did not split (payload=[$F_PAYLOAD] delta=[$F_DELTA])"; fi
+done
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]

@@ -500,6 +500,7 @@ install() {
   atomic_install "$SCRIPT_DIR/scripts/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-session-start.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-prompt-hook.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-idle-cache.sh" "$SCRIPTS_DIR/handoff-idle-cache.sh" 755
+  atomic_install "$SCRIPT_DIR/scripts/handoff-fire.sh" "$SCRIPTS_DIR/handoff-fire.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-ledger.sh" 755
   atomic_install "$SCRIPT_DIR/scripts/handoff-retro-filter.py" "$SCRIPTS_DIR/handoff-retro-filter.py" 755
   info "Handoff hook scripts installed"
@@ -555,7 +556,7 @@ uninstall() {
   echo ""
 
   rm -f "$SCRIPTS_DIR/handoff-session-start.sh" "$SCRIPTS_DIR/handoff-prompt-hook.sh" \
-    "$SCRIPTS_DIR/handoff-idle-cache.sh" \
+    "$SCRIPTS_DIR/handoff-idle-cache.sh" "$SCRIPTS_DIR/handoff-fire.sh" \
     "$SCRIPTS_DIR/handoff-ledger.sh" "$SCRIPTS_DIR/handoff-retro-filter.py"
   info "Handoff hook scripts removed"
 

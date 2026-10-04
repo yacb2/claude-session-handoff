@@ -257,7 +257,7 @@ Never ask in the mandated-by-a-running-process case — no one is at the keyboar
 run to ask is the exact failure that case exists to prevent. Never ask on the `handoff:` hook
 path either; it bypasses the model entirely, so there is nothing to ask with.
 
-The bound matters because the mechanism gives you no third option: touching `$EXIT_TRIGGER` ends
+The bound matters because the mechanism gives you no third option: firing the handoff ends
 this session in ~0.5s, so asking *is* postponing the handoff by a turn. Deferring a handoff the
 user asked for, to ask them something, is how this skill's worst failure mode looks from the
 outside — answering a request for the move with words instead. So: ask only about which thread,
@@ -265,87 +265,42 @@ never about whether to hand off, and never twice.
 
 ### Step 2 — execute
 
-With the payload ready, run via Bash. Both checks are part of the block, not notes above it.
-Run the block inside the sandbox first: if it answers that `ps` cannot run, rerun it once with
-`dangerouslyDisableSandbox: true` — the ancestry walk needs the process tree, and the sandbox hides
-it. That is the only reason to disable the sandbox here, and the block tells you when it applies.
+With the payload ready, run `handoff-fire.sh` via Bash. The guards live in the script, not in
+notes above it. Run it inside the sandbox first: if it answers that `ps` cannot run, rerun it once
+with `dangerouslyDisableSandbox: true` — the ancestry walk needs the process tree, and the sandbox
+hides it. That is the only reason to disable the sandbox here, and the script tells you when it
+applies.
 
-The first is the one you can guess: unset, every path below still runs and writes
-`handoff-payload-`, `handoff-flag-` and `handoff-exit-` with an empty suffix — files no wrapper is
-watching — and then reports success. The second is the one you cannot: the wrapper exports
-`$CLAUDE_HANDOFF_ID` as its own PID, and **every descendant inherits it**, including sessions the
-wrapper never launched and does not supervise — a `--fork-session`, a `--resume`, a harness
-background job. There the variable is set and its wrapper is long dead, so a set/unset test passes
-in exactly the case it exists to catch. What separates the two is ancestry, which is why the block
-walks the parent chain.
+The script refuses in two cases. Unset `$CLAUDE_HANDOFF_ID` is the one you can guess: without the
+check it would write `handoff-payload-`, `handoff-flag-` and `handoff-exit-` with an empty suffix —
+files no wrapper is watching — and report success. The second is the one you cannot: the wrapper
+exports `$CLAUDE_HANDOFF_ID` as its own PID, and **every descendant inherits it**, including
+sessions the wrapper never launched and does not supervise — a `--fork-session`, a `--resume`, a
+harness background job. There the variable is set and its wrapper is long dead, so a set/unset test
+passes in exactly the case it exists to catch. What separates the two is ancestry, which is why the
+script walks the parent chain.
+
+stdin is the brief. A line that is exactly `__HANDOFF_DELTA__` ends the brief: what follows is the
+ledger deltas, one per line (OPEN / CLOSE / TURN / CHARTER), written to the delta file. The delta
+file exists for the same reason as the payload: this session knows neither its own id nor its chain,
+so the SessionStart hook — the one place chain identity exists — applies it. OMIT the
+`__HANDOFF_DELTA__` line and everything after it when nothing changed; an empty delta is a no-op but
+a fabricated one is a lie that outlives the session.
 
 ```sh
-if [ -z "$CLAUDE_HANDOFF_ID" ]; then
-  echo "handoff: wrapper not detected. Launch claude via the shell function that claude-session-handoff installs." >&2
-  exit 1
-fi
-
-# The Bash tool's sandbox cannot exec ps (rc 127) and denies kill -0 too, so
-# the walk below would see an empty chain and blame the wrapper. Say which it is.
-if ! ps -o ppid= -p $$ >/dev/null 2>&1; then
-  echo "handoff: ps cannot run here, so the wrapper cannot be verified (the Bash tool's sandbox hides the process tree). Nothing was written. Rerun this block with dangerouslyDisableSandbox: true." >&2
-  exit 1
-fi
-
-# Same walk as handoff-prompt-hook.sh's is_wrapper_ancestor(): a set variable
-# proves a wrapper ran somewhere up the tree, not that mine is still watching.
-is_wrapper_ancestor() {
-  _pid=$$
-  while _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' '); [ -n "$_pid" ]; do
-    case "$_pid" in
-      0|1) return 1 ;;
-    esac
-    [ "$_pid" = "$CLAUDE_HANDOFF_ID" ] && return 0
-  done
-  return 1
-}
-
-if ! is_wrapper_ancestor; then
-  echo "handoff: wrapper PID $CLAUDE_HANDOFF_ID is not an ancestor of this session (stale or inherited env var). Nothing was written and this session will not close." >&2
-  exit 1
-fi
-
-mkdir -p "$HOME/.claude/tmp"
-
-# The payload is conversation content. Claude Code stores transcripts 0600; the
-# default umask would write this 0644, i.e. more readable than its source.
-umask 077
-
-# Ledger deltas. Same drop-a-file pattern as the payload, and for the same
-# reason: this session knows neither its own id nor its chain, so it cannot key
-# a ledger. The SessionStart hook — the one place chain identity exists — applies
-# these. OMIT this whole cat when nothing changed; an empty delta is a no-op but
-# a fabricated one is a lie that outlives the session.
-DELTA_FILE="$HOME/.claude/tmp/handoff-ledger-$CLAUDE_HANDOFF_ID"
-cat > "$DELTA_FILE" <<'__HANDOFF_DELTA_EOF__'
-<ONE DELTA PER LINE — OPEN / CLOSE / TURN / CHARTER — OR OMIT THIS BLOCK ENTIRELY>
-__HANDOFF_DELTA_EOF__
-
-PAYLOAD_FILE="$HOME/.claude/tmp/handoff-payload-$CLAUDE_HANDOFF_ID"
-FLAG_FILE="$HOME/.claude/tmp/handoff-flag-$CLAUDE_HANDOFF_ID"
-EXIT_TRIGGER="$HOME/.claude/tmp/handoff-exit-$CLAUDE_HANDOFF_ID"
-
-cat > "$PAYLOAD_FILE" <<'__HANDOFF_PAYLOAD_EOF__'
+sh "$HOME/.claude/scripts/handoff-fire.sh" <<'__HANDOFF_EOF__'
 <THE HANDOFF PROMPT HERE>
-__HANDOFF_PAYLOAD_EOF__
-
-touch "$FLAG_FILE"
-touch "$EXIT_TRIGGER"
+__HANDOFF_DELTA__
+<ONE DELTA PER LINE — OPEN / CLOSE / TURN / CHARTER — OR DROP THE LINE ABOVE AND THIS ONE>
+__HANDOFF_EOF__
 ```
 
-Read the block's exit status before deciding what to say. Non-zero means it refused and printed
+Read the exit status before deciding what to say. Non-zero means it refused and printed
 why: nothing was written, this session is not closing, and staying silent leaves the user watching
 a handoff that never happened. Report the reason in that same turn and stop.
 
-Only on exit 0, having touched `$EXIT_TRIGGER`, do not emit any more output — the wrapper's watcher
+Only on exit 0, do not emit any more output — the wrapper's watcher
 will close this process within ~0.5s and launch the new session, so anything else is lost anyway.
-
-The block ends with `touch`, never a signal: the permission classifier escalates any process-signal primitive regardless of allowlist rules, so the wrapper owns termination through a background watcher that polls `$EXIT_TRIGGER` and signals claude.
 
 ### Step 3 — zero-token alternatives
 
