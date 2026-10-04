@@ -42,6 +42,26 @@ trap 'rm -rf "$FAKE"' EXIT
 ln -s "$(command -v sh)" "$FAKE/claude"
 CWD=/w/proj-under-test
 KEY=$(printf '%s' "$CWD" | tr '/' '-')
+# A clock that moves one second per call, first in the PATH `link` runs the hook
+# under. Every link start happens within one real second, so nothing would cross
+# a second boundary between the ledger apply and the record's `at`, and moving
+# the record build before the apply would stay green (BL-048; R1b owns it). Its
+# state lives in the sandbox HOME, so each `box` restarts the count. The base is
+# in the past: rows a case appends directly, outside `link`, carry the real wall
+# clock and must still read as written later.
+mkdir "$FAKE/bin"
+cat > "$FAKE/bin/date" <<'SHIM'
+#!/bin/sh
+if [ "$#" -eq 2 ] && [ "$1" = -u ] && [ "$2" = '+%Y-%m-%dT%H:%M:%SZ' ]; then
+  _c=$(cat "$HOME/.date-shim" 2>/dev/null || echo 0)
+  _c=$((_c + 1))
+  echo "$_c" > "$HOME/.date-shim"
+  printf '2026-01-01T%02d:%02d:%02dZ\n' $((_c / 3600)) $((_c / 60 % 60)) $((_c % 60))
+  exit 0
+fi
+exec /bin/date "$@"
+SHIM
+chmod +x "$FAKE/bin/date"
 
 SANDBOX=""
 box() {
@@ -49,7 +69,7 @@ box() {
   mkdir -p "$SANDBOX/.claude/tmp"
 }
 
-# link <session-id> <slug> <delta-or-empty> [mech-line-or-empty]
+# link <session-id> <slug> <delta-or-empty> [mech-line-or-empty] [typed-brief]
 #
 # The delta argument is what the session BEFORE this one wrote at its handoff —
 # that is the real flow, and the fixture has to model it or the ordinals drift.
@@ -57,9 +77,17 @@ box() {
 #
 # -> CTX holds the injected context
 CTX=""
+#
+# A typed brief is what `handoff: <text>` writes: the text alone, no `slug:`
+# line, so the chain name travels in the title file the prompt hook writes.
 link() {
-  printf 'slug: %s\n\n## Current goal\n\nwhatever this link was doing.\n' "$2" \
-    > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+  if [ -n "${5:-}" ]; then
+    printf '%s' "$5" > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+    printf 'slug=%s\n' "$2" > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+  else
+    printf 'slug: %s\n\n## Current goal\n\nwhatever this link was doing.\n' "$2" \
+      > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+  fi
   if [ -n "$3" ]; then
     printf '%s\n' "$3" > "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
   fi
@@ -71,7 +99,7 @@ link() {
   fi
   printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
     "$1" "$CWD" > "$SANDBOX/ss-in"
-  HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" \
+  HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" PATH="$FAKE/bin:$PATH" \
     "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
   OUT=$(cat "$SANDBOX/ss-out")
   CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
@@ -729,16 +757,20 @@ fake_transcript V2
 backdate V2
 printf 'TURN decided mid-session\nOPEN OWED pick a colour\n' > "$SANDBOX/mid"
 sh "$LEDGER_SH" apply "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" "$SANDBOX/mid" 2
-link V3 'chain v' '' 'NOTE link ended model-free — bare handoff.'
+# V2 ends on `handoff: <text>`, not a bare handoff: the narrowed intro must not
+# claim it was bare, and names every way a link ends without a delta (BL-048).
+link V3 'chain v' '' 'NOTE link ended model-free — the owner typed the brief himself (`handoff: <text>`), so no session wrote deltas for it' 'pick the colour work back up'
 _retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
 if printf '%s' "$_retro" | grep -q 'PREDECESSOR RETRO' \
   && ! printf '%s' "$_retro" | grep -q 'No ledger delta reached' \
+  && ! printf '%s' "$_retro" | grep -q 'ended on a bare' \
+  && printf '%s' "$_retro" | grep -q '`handoff: <text>`' \
   && ! grep -q '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" \
   && printf '%s' "$_retro" | grep -q '^ *TURN decided mid-session$' \
   && printf '%s' "$_retro" | grep -q '^ *OPEN d1 OWED pick a colour$'; then
   ok "R2b: mid-session rows narrow the retro to what is missing, with no false NOTE"
 else
-  no "R2b: a link with mid-session rows got the full retro or the model-free NOTE"
+  no "R2b: a link with mid-session rows got the full retro, the model-free NOTE, or a bare-handoff claim"
   grep '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" | sed 's/^/     /'
   printf '%s\n' "$_retro" | head -12 | sed 's/^/     /'
 fi

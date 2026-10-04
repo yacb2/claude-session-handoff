@@ -603,8 +603,9 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
       if [ -n "${OWN_ROWS:-}" ]; then
         RETRO_INTRO=$(printf '%s\n' \
 'The previous link of this chain wrote these rows to the ledger mid-session and' \
-'then ended on a bare `handoff`, so nothing it decided after them reached the' \
-'record:' \
+'then ended without a delta — a bare `handoff` or `handoff: <text>` bypasses the' \
+'model entirely, and a skill-path handoff can leave its delta block' \
+'unsubstituted — so nothing it decided after them reached the record:' \
 "$OWN_ROWS" \
 'Its transcript is on disk and reading it is cheap. Recover only what is not' \
 'among those rows, and paste them to the subagent with the open items below.')
