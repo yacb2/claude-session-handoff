@@ -128,7 +128,7 @@ def scan(since):
         project = project[project.rfind("projects-") + 9:] if "projects-" in project else project
         sid = os.path.basename(path)[:8]
         first = next((text_of(r["message"]) for r in rows if is_user_prompt(r)), "")
-        child = first.strip().lower() == "continue" or any(
+        child = first.strip().lower() in ("continue", "continúa desde el brief del handoff.") or any(
             "handoff" in json.dumps(r.get("message", {}).get("content", ""))[:400].lower()
             for r in rows[:3] if r.get("type") == "user")
         for i, r in enumerate(rows):

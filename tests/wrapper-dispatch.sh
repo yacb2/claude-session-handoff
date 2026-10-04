@@ -88,10 +88,10 @@ else
 fi
 
 # 2. a seeded handoff relaunches with the kickoff prompt (current design)
-if [ "$(argv_of 2)" = "continue" ]; then
+if [ "$(argv_of 2)" = "Continúa desde el brief del handoff." ]; then
   ok "seeded handoff relaunches with the kickoff prompt"
 else
-  no "seeded handoff should pass 'continue', got '$(argv_of 2)'"
+  no "seeded handoff should pass the kickoff sentence, got '$(argv_of 2)'"
 fi
 
 # 3. THE REGRESSION: a payload-less handoff must relaunch bare.
