@@ -829,6 +829,35 @@ else
   sed 's/^/     /' "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger"
 fi
 
+# --- Case R2e: a hook row beside a session row (the `hook` clause) -----------
+#
+# R2d has only the hook row, so it cannot tell "skip hook rows" from "list
+# nothing". Here S1 also wrote a mid-session row: the retro must list that one
+# and must not list the hook-stamped CHARTER next to it.
+retro_box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+printf '2000-01-01T00:00:00Z\t1\tCHARTER\t-\t-\thookcharter-text\thook\n' \
+  > "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger"
+printf 'TURN decided mid-session\n' > "$SANDBOX/mid"
+sh "$LEDGER_SH" apply "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger" "$SANDBOX/mid" 1 session
+fake_transcript S1
+printf 'slug=chain s\nprev=S1\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+printf 'NOTE link ended model-free — bare handoff.\n' > "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID"
+printf '{"session_id":"S2","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+  "$CWD" > "$SANDBOX/ss-in"
+HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" PATH="$FAKE/bin:$PATH" \
+  "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+CTX=$(jq -r '.hookSpecificOutput.additionalContext // empty' "$SANDBOX/ss-out" 2>/dev/null)
+_retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
+if printf '%s' "$_retro" | grep -q 'wrote these rows' \
+  && printf '%s' "$_retro" | grep -q '^ *TURN decided mid-session$' \
+  && ! printf '%s' "$_retro" | grep -q 'hookcharter-text'; then
+  ok "R2e: the retro lists the session row and not the hook-stamped one beside it"
+else
+  no "R2e: a hook-stamped row was listed as the previous link's own write, or the session row was missed"
+  printf '%s\n' "$_retro" | head -10 | sed 's/^/     /'
+fi
+
 # --- Case R3: nothing to read degrades to silence --------------------------
 #
 # Every other path in these hooks degrades to silence. An instruction pointing
