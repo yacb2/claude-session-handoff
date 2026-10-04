@@ -213,7 +213,7 @@ variants each need a different sequence per emulator.
 | `scripts/handoff-prompt-hook.sh` | UserPromptSubmit hook: intercepts `handoff` / `handoff: <text>` and triggers a handoff without going through the model. |
 | `scripts/handoff-ledger.sh` | The chain ledger: `apply` records a link's deltas, `render` prints the block the SessionStart hook injects. Append-only, one file per chain, no model involved — which is what lets it reach the model-free `handoff` paths too. |
 | `scripts/handoff-retro-filter.py` | Reduces a transcript to the prose a retro can read (measured 2.8 MB → 56 KB; 260 MB → 199 KB in 0.4s). Mechanical, no model. Feeds the `PREDECESSOR RETRO` block the SessionStart hook injects when the previous link ended without any model writing deltas. |
-| `scripts/ledger-readout.sh` | Read-only report over the recorded chains: how often a live session writes deltas, how many links a retro recovered, and how many ended model-free. **Repo-only — not installed**; run it from a checkout. |
+| `scripts/ledger-readout.sh` | Read-only report over the recorded chains: how often a live session writes deltas, how many links a retro recovered, and how many ended model-free. `--owed [project]` lists the open OWED items of chains idle 7+ days instead. **Repo-only — not installed**; run it from a checkout. |
 | `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |

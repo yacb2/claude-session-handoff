@@ -36,27 +36,24 @@
 # and the failure mode this exists to make visible. With one exception that has
 # to be carved out or the number is wrong forever: a chain whose last link ran
 # BEFORE the mechanism was installed never had a ledger to write to. Those are
-# marked `pre` and excluded from the total. The install moment is read off the
-# mtime of the installed script rather than hardcoded, so this keeps working
-# after a reinstall instead of silently re-including old chains.
+# marked `pre` and excluded from the total. The cutoff is the ledger's first
+# commit, fixed: it used to be the installed script's mtime, which every
+# reinstall moved forward (`install.sh` copies without `-p`), and it had marked
+# 92 chains `pre` that do have ledgers.
 set -u
 
 STORE="${HOME}/.claude/handoff-chains"
 [ -d "$STORE" ] || { echo "no chain store at $STORE"; exit 0; }
 command -v jq >/dev/null || { echo "jq required"; exit 1; }
 
-INSTALLED_AT=""
-for C in "${HOME}/.claude/scripts/handoff-ledger.sh" "${CLAUDE_DIR:-}/scripts/handoff-ledger.sh"; do
-  [ -f "$C" ] || continue
-  INSTALLED_AT=$(date -u -r "$C" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) && break
-done
+# First commit of scripts/handoff-ledger.sh (88931e3), in UTC.
+LEDGER_SINCE="2026-08-22T20:29:15Z"
 
 TOT_H=0; TOT_W=0; TOT_T=0; TOT_C=0; TOT_PRE=0; TOT_N=0; TOT_R=0
 
-printf '%-34s %6s %9s %6s %6s %6s %6s\n' 'chain' 'links' 'handoffs' 'wrote' 'retro' 'turns' 'notes'
-printf '%-34s %6s %9s %6s %6s %6s %6s\n' '----------------------------------' '------' '---------' '------' '------' '------' '------'
-
-# ledger_counts <ledger> -> "wrote retros turns notes" (all 0 when absent).
+# ledger_counts <ledger> <handoffs> -> "wrote retros turns notes" (all 0 when
+# absent). Rows past the last handoff are skipped: the last link is not in the
+# denominator, so counting its rows let wrote exceed handoffs.
 #   wrote : links with a session-written entry
 #   retros: links whose ONLY entries are recovered — where both exist the
 #           session wrote, and the retro merely added
@@ -65,7 +62,8 @@ printf '%-34s %6s %9s %6s %6s %6s %6s\n' '----------------------------------' '-
 #           exactly like a link nothing was ever recorded for
 ledger_counts() {
   [ -f "$1" ] || { printf '0 0 0 0'; return; }
-  awk -F'\t' '
+  awk -F'\t' -v h="$2" '
+    $2+0 > h+0 { next }
     $3!="NOTE" && $7!="retro" { w[$2]=1 }
     $3!="NOTE" && $7=="retro" { r[$2]=1 }
     $3=="NOTE" { n[$2]=1 }
@@ -79,6 +77,34 @@ ledger_counts() {
 }
 chain_last() { jq -r --arg c "$2" 'select(.chain == $c) | .at' "$1" 2>/dev/null | sort | tail -1; }
 
+# --owed [project]: the open OWED items of chains whose last link is 7+ days
+# old, one tab-separated line each (project, chain, link, id, text). A chain
+# nobody continues injects them into no session, so this is where they surface.
+# Open means what render means: no CLOSE row for the id. [project] is a
+# substring of the store's path-derived file name.
+if [ "${1:-}" = "--owed" ]; then
+  IDLE_SINCE=$(jq -rn 'now - 604800 | todate')
+  for F in "$STORE"/*.jsonl; do
+    [ -f "$F" ] || continue
+    PROJ=$(basename "$F" .jsonl)
+    case "$PROJ" in *"${2:-}"*) ;; *) continue ;; esac
+    for CHAIN in $(jq -r '.chain' "$F" 2>/dev/null | sort -u); do
+      L="$STORE/$PROJ.$CHAIN.ledger"
+      [ -f "$L" ] || continue
+      LAST=$(chain_last "$F" "$CHAIN")
+      [ -n "$LAST" ] && [ "$LAST" \< "$IDLE_SINCE" ] || continue
+      awk -F'\t' -v p="$PROJ" -v c="$CHAIN" '
+        $3=="CLOSE" { closed[$4]=1 }
+        $3=="OPEN" && $5=="OWED" && !($4 in link) { o[++k]=$4; link[$4]=$2; text[$4]=$6 }
+        END { for (i=1; i<=k; i++) if (!(o[i] in closed)) printf "%s\t%s\t%s\t%s\t%s\n", p, c, link[o[i]], o[i], text[o[i]] }' "$L"
+    done
+  done
+  exit 0
+fi
+
+printf '%-34s %6s %9s %6s %6s %6s %6s\n' 'chain' 'links' 'handoffs' 'wrote' 'retro' 'turns' 'notes'
+printf '%-34s %6s %9s %6s %6s %6s %6s\n' '----------------------------------' '------' '---------' '------' '------' '------' '------'
+
 for F in "$STORE"/*.jsonl; do
   [ -f "$F" ] || continue
   PROJ=$(basename "$F" .jsonl)
@@ -90,10 +116,10 @@ for F in "$STORE"/*.jsonl; do
     LEDGER="$STORE/$PROJ.$CHAIN.ledger"
     HANDOFFS=$((LINKS - 1))
     [ "$HANDOFFS" -ge 1 ] || continue
-    set -- $(ledger_counts "$LEDGER"); WROTE=$1; RETROS=$2; TURNS=$3; NOTES=$4
+    set -- $(ledger_counts "$LEDGER" "$HANDOFFS"); WROTE=$1; RETROS=$2; TURNS=$3; NOTES=$4
     LAST=$(chain_last "$F" "$CHAIN")
     MARK=""
-    if [ -n "$INSTALLED_AT" ] && [ -n "$LAST" ] && [ "$LAST" \< "$INSTALLED_AT" ]; then MARK=" pre"; fi
+    if [ -n "$LAST" ] && [ "$LAST" \< "$LEDGER_SINCE" ]; then MARK=" pre"; fi
     printf '%-34s %6s %9s %6s %6s %6s %6s%s\n' "$(printf '%s' "$PROJ" | tail -c 18).$(printf '%s' "$CHAIN" | cut -c1-6)" \
       "$LINKS" "$HANDOFFS" "$WROTE" "$RETROS" "$TURNS" "$NOTES" "$MARK"
     # Subshell: the pipeline above means these cannot escape, so the totals are
@@ -113,10 +139,10 @@ for F in "$STORE"/*.jsonl; do
     H=$((LINKS - 1)); [ "$H" -ge 1 ] || continue
     L="$STORE/$PROJ.$CHAIN.ledger"
     LAST=$(chain_last "$F" "$CHAIN")
-    if [ -n "$INSTALLED_AT" ] && [ -n "$LAST" ] && [ "$LAST" \< "$INSTALLED_AT" ]; then
+    if [ -n "$LAST" ] && [ "$LAST" \< "$LEDGER_SINCE" ]; then
       TOT_PRE=$((TOT_PRE + 1)); continue
     fi
-    set -- $(ledger_counts "$L"); W=$1; R=$2; T=$3; NT=$4
+    set -- $(ledger_counts "$L" "$H"); W=$1; R=$2; T=$3; NT=$4
     TOT_H=$((TOT_H + H)); TOT_W=$((TOT_W + W)); TOT_T=$((TOT_T + T)); TOT_C=$((TOT_C + 1))
     TOT_N=$((TOT_N + NT)); TOT_R=$((TOT_R + R))
   done

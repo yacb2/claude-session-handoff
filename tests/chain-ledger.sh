@@ -1075,6 +1075,87 @@ else
 fi
 rm -rf "$WBOX"
 
+# --- Case W2: the `pre` cutoff does not move with a reinstall --------------
+#
+# The cutoff was the installed script's mtime, and `install.sh` copies without
+# `-p`, so every reinstall moved it forward and re-marked chains that DO have a
+# ledger as predating it: 92 of 99 excluded chains in the field. A chain from
+# before the ledger existed, with none, must still be excluded.
+WBOX=$(mktemp -d)
+mkdir -p "$WBOX/.claude/handoff-chains" "$WBOX/.claude/scripts"
+touch "$WBOX/.claude/scripts/handoff-ledger.sh"
+CH="$WBOX/.claude/handoff-chains/-w-proj.jsonl"
+for i in 1 2 3 4; do
+  printf '{"chain":"CA","n":%d,"slug":"a","session":"A%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' \
+    "$i" "$i" "$i" >> "$CH"
+done
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tdeclared\tsession\n' > "$WBOX/.claude/handoff-chains/-w-proj.CA.ledger"
+for i in 1 2; do
+  printf '{"chain":"CO","n":%d,"slug":"o","session":"O%d","prev":"","wrapper":"1","at":"2026-08-01T00:0%d:00Z"}\n' \
+    "$i" "$i" "$i" >> "$CH"
+done
+RO=$(HOME="$WBOX" sh "$READOUT" 2>/dev/null)
+if printf '%s' "$RO" | grep -q '1 chains, 3 handoffs, 1 wrote deltas' \
+  && printf '%s' "$RO" | grep -q '(1 chain(s) marked `pre`'; then
+  ok "W2: a chain with a ledger counts after a reinstall, and one from before the ledger stays pre"
+else
+  no "W2: the pre cutoff followed the installed script's mtime"
+  printf '%s\n' "$RO" | sed 's/^/     /'
+fi
+rm -rf "$WBOX"
+
+# --- Case W3: the last link is not a handoff --------------------------------
+#
+# `handoffs` excludes the chain's last link, so a session row stamped with it
+# must not count toward `wrote` either, or wrote exceeds handoffs.
+WBOX=$(mktemp -d)
+mkdir -p "$WBOX/.claude/handoff-chains"
+CH="$WBOX/.claude/handoff-chains/-w-proj.jsonl"
+for i in 1 2; do
+  printf '{"chain":"CL","n":%d,"slug":"l","session":"L%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' \
+    "$i" "$i" "$i" >> "$CH"
+done
+L="$WBOX/.claude/handoff-chains/-w-proj.CL.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tfirst link\tsession\n' > "$L"
+printf '2026-08-23T00:00:00Z\t2\tOPEN\td2\tOWED\tlast link\tsession\n' >> "$L"
+RO=$(HOME="$WBOX" sh "$READOUT" 2>/dev/null)
+if printf '%s' "$RO" | grep -q '1 chains, 1 handoffs, 1 wrote deltas (100%)'; then
+  ok "W3: a session row on the last link does not push wrote past handoffs"
+else
+  no "W3: the last link counted toward wrote"
+  printf '%s\n' "$RO" | sed 's/^/     /'
+fi
+rm -rf "$WBOX"
+
+# --- Case W4: --owed lists what dead chains still owe ----------------------
+#
+# A chain nobody continues injects its open OWED items into no session, so they
+# are stranded. `--owed [project]` lists the open ones of chains idle 7+ days:
+# a closed OWED, a RULE, a live chain and another project stay out.
+WBOX=$(mktemp -d)
+S="$WBOX/.claude/handoff-chains"
+mkdir -p "$S"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+for i in 1 2; do
+  printf '{"chain":"CD","n":%d,"slug":"d","session":"D%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' "$i" "$i" "$i" >> "$S/-w-proj.jsonl"
+  printf '{"chain":"CF","n":%d,"slug":"f","session":"F%d","prev":"","wrapper":"1","at":"%s"}\n' "$i" "$i" "$NOW" >> "$S/-w-proj.jsonl"
+  printf '{"chain":"CX","n":%d,"slug":"x","session":"X%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' "$i" "$i" "$i" >> "$S/-w-other.jsonl"
+done
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tstill owed\tsession\n' > "$S/-w-proj.CD.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td2\tOWED\tsettled\tsession\n' >> "$S/-w-proj.CD.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td3\tRULE\ta rule\tsession\n' >> "$S/-w-proj.CD.ledger"
+printf '2026-08-23T00:00:00Z\t2\tCLOSE\td2\t-\tdone\tsession\n' >> "$S/-w-proj.CD.ledger"
+printf '%s\t1\tOPEN\td1\tOWED\tlive chain item\tsession\n' "$NOW" > "$S/-w-proj.CF.ledger"
+printf '2026-08-23T00:00:00Z\t1\tOPEN\td1\tOWED\tother project item\tsession\n' > "$S/-w-other.CX.ledger"
+RO=$(HOME="$WBOX" sh "$READOUT" --owed proj 2>/dev/null)
+if [ "$RO" = "$(printf -- '-w-proj\tCD\t1\td1\tstill owed')" ]; then
+  ok "W4: --owed lists only the open OWED of a dead chain in the named project"
+else
+  no "W4: --owed listed the wrong items"
+  printf '%s\n' "$RO" | sed 's/^/     /'
+fi
+rm -rf "$WBOX"
+
 # --- Case X: a recovered entry says so in the trajectory --------------------
 #
 # Provenance is not only a counter. A reader of the trajectory is entitled to
