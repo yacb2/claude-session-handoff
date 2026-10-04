@@ -80,6 +80,12 @@ if [ "$RC" = 0 ] && [ -z "$ERR" ]; then
 else
   no "3: shallow session woken (rc=$RC)"
 fi
+#    ...and says why in the hook's log, so silent periods can be told apart
+if grep -q " S3 shallow\$" "$BOX/.claude/tmp/handoff-idle.log" 2>/dev/null; then
+  ok "3: the silent exit logs its reason"
+else
+  no "3: no reason logged ($(cat "$BOX/.claude/tmp/handoff-idle.log" 2>/dev/null))"
+fi
 
 # 4. activity after the Stop -> silent. The line lands after the settle poll,
 #    so it reads as a turn in flight, not as post-Stop bookkeeping.

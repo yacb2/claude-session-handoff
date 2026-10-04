@@ -79,6 +79,13 @@ assert "UserPromptSubmit handoff hook"   'grep -q handoff-prompt-hook.sh "$CLAUD
 assert "UserPromptSubmit restart hook"   'grep -q restart-hook.sh "$CLAUDE_DIR/settings.json"'
 assert "Stop idle-cache hook is async + asyncRewake" \
   'jq -e "(.hooks.Stop // []) | any(.hooks | any((.command | test(\"handoff-idle-cache\")) and .async == true and .asyncRewake == true))" "$CLAUDE_DIR/settings.json" >/dev/null'
+# Claude Code kills an async hook at its `timeout` (seconds, default 600), and
+# the hook sleeps IDLE_S polling every POLL_S before it can wake anyone.
+IDLE_S=$(sed -n 's/^IDLE_S="\${HANDOFF_IDLE_S:-\([0-9]*\)}"$/\1/p' "$REPO_HANDOFF/scripts/handoff-idle-cache.sh")
+POLL_S=$(sed -n 's/^POLL_S="\${HANDOFF_IDLE_POLL_S:-\([0-9]*\)}"$/\1/p' "$REPO_HANDOFF/scripts/handoff-idle-cache.sh")
+stop_timeout() { jq "[.hooks.Stop[]?.hooks[]? | select(.command | test(\"handoff-idle-cache\")) | .timeout // 0] | max // 0" "$CLAUDE_DIR/settings.json"; }
+assert "Stop idle-cache timeout ($(stop_timeout)) outlasts IDLE_S + POLL_S ($IDLE_S + $POLL_S)" \
+  '[ -n "$IDLE_S" ] && [ -n "$POLL_S" ] && [ "$(stop_timeout)" -gt $((IDLE_S + POLL_S)) ]'
 
 # --- Case 2: reverse order ---
 echo "Case 2: restart then handoff"
@@ -255,6 +262,29 @@ assert "10b unscoped registration gained the matcher" \
   'jq -e "(.hooks.SessionStart // []) | any((.matcher == \"startup\") and (.hooks | any(.command | test(\"handoff-session-start\"))))" "$SETTINGS" >/dev/null'
 assert "10b the hook is registered exactly once" \
   '[ "$(jq "[.hooks.SessionStart[]?.hooks[]? | select(.command | test(\"handoff-session-start\"))] | length" "$SETTINGS")" -eq 1 ]'
+
+# Migration: an install from before the timeout has the async entry without
+# it, and is re-registered like one that lacks the matcher.
+echo "Case 11: an existing Stop registration without a timeout is migrated"
+new_sandbox case11
+cat > "$CLAUDE_DIR/settings.json" << EOF
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_DIR/scripts/handoff-idle-cache.sh", "async": true, "asyncRewake": true }
+        ]
+      }
+    ]
+  }
+}
+EOF
+run_handoff
+assert "11 the Stop entry gained a timeout that outlasts the idle wait" \
+  '[ "$(stop_timeout)" -gt $((IDLE_S + POLL_S)) ]'
+assert "11 the hook is registered exactly once" \
+  '[ "$(jq "[.hooks.Stop[]?.hooks[]? | select(.command | test(\"handoff-idle-cache\"))] | length" "$CLAUDE_DIR/settings.json")" -eq 1 ]'
 
 echo ""
 echo "Summary: $PASS pass, $FAIL fail"

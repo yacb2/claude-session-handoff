@@ -16,22 +16,26 @@
 # handoff wrapper (it could not hand off anyway), jq is missing, a newer Stop of
 # the same session superseded this one, the transcript changed while waiting,
 # the session is gone, the session is shallow, or this idle period already
-# woke it once.
+# woke it once. Each silent exit appends "<epoch> <pid> <session> <reason>" to
+# handoff-idle.log, a name outside the prune glob below.
 set -u
 IDLE_S="${HANDOFF_IDLE_S:-3240}"
 POLL_S="${HANDOFF_IDLE_POLL_S:-60}"
 MIN_DEPTH="${HANDOFF_IDLE_MIN_DEPTH:-200000}"
 TAG="[handoff-idle]"
+DIR="$HOME/.claude/tmp"
+SID=""
 
-[ -t 0 ] && exit 0
-[ -n "${CLAUDE_HANDOFF_ID:-}" ] || exit 0
-command -v jq >/dev/null 2>&1 || exit 0
+quit() { { printf '%s %s %s %s\n' "$(date +%s)" "$$" "${SID:--}" "$1" >> "$DIR/handoff-idle.log"; } 2>/dev/null; exit 0; }
+
+[ -t 0 ] && quit tty
+[ -n "${CLAUDE_HANDOFF_ID:-}" ] || quit no-wrapper
+command -v jq >/dev/null 2>&1 || quit no-jq
 IN=$(cat)
 SID=$(printf '%s' "$IN" | jq -r '.session_id // empty' 2>/dev/null)
 TP=$(printf '%s' "$IN" | jq -r '.transcript_path // empty' 2>/dev/null)
-[ -n "$SID" ] && [ -f "$TP" ] || exit 0
+[ -n "$SID" ] && [ -f "$TP" ] || quit no-transcript
 
-DIR="$HOME/.claude/tmp"
 mkdir -p "$DIR" 2>/dev/null || exit 0
 # One arm file per session ever run; prune this hook's own state after a week.
 find "$DIR" -maxdepth 1 -name 'handoff-idle-*' -mtime +7 -delete 2>/dev/null
@@ -51,7 +55,7 @@ last_prompt() {
 # again on it would re-read the cache every hour, all night, keeping it warm for
 # nobody. Only a new real prompt starts a new idle period.
 PROMPT=$(last_prompt)
-[ -f "$WOKE" ] && [ "$(cat "$WOKE")" = "$PROMPT" ] && exit 0
+[ -f "$WOKE" ] && [ "$(cat "$WOKE")" = "$PROMPT" ] && quit already-woken
 
 TOKEN="$$"
 printf '%s' "$TOKEN" > "$ARM"
@@ -65,16 +69,16 @@ BASE=""
 while [ "$WAITED" -lt "$IDLE_S" ]; do
   sleep "$POLL_S"
   WAITED=$((WAITED + POLL_S))
-  [ "$(cat "$ARM" 2>/dev/null)" = "$TOKEN" ] || exit 0
-  [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" = 1 ] && exit 0
+  [ "$(cat "$ARM" 2>/dev/null)" = "$TOKEN" ] || quit superseded
+  [ "$(ps -o ppid= -p $$ 2>/dev/null | tr -d ' ')" = 1 ] && quit session-gone
   [ -n "$BASE" ] || BASE=$(size)
 done
-[ "$(size)" = "$BASE" ] || exit 0
+[ "$(size)" = "$BASE" ] || quit "transcript-changed $BASE->$(size)"
 
 DEPTH=$(jq -r 'select(.message.usage) | .message.usage
     | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)' \
     "$TP" 2>/dev/null | tail -1)
-[ -n "$DEPTH" ] && [ "$DEPTH" -ge "$MIN_DEPTH" ] || exit 0
+[ -n "$DEPTH" ] && [ "$DEPTH" -ge "$MIN_DEPTH" ] || quit shallow
 
 printf '%s' "$PROMPT" > "$WOKE"
 printf '%s Idle ~%s min at ~%sk tokens of context. The prompt cache expires at 60 min, and the owner'"'"'s next message would re-write all of it. If a standing handoff grant covers this session and a handoff is safe now, hand off with `mode: idle` as the brief'"'"'s second line (session-handoff skill, "Idle cache expiry"). Otherwise end the turn with one line.\n' \

@@ -530,7 +530,9 @@ install() {
   add_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
   # Async: it sleeps ~54 min after every Stop. asyncRewake: exit 2 wakes the
   # idle session with the hook's stderr, before the prompt cache expires.
-  add_hook Stop "$CLAUDE_REF/scripts/handoff-idle-cache.sh" "" '{"async":true,"asyncRewake":true}'
+  # timeout (seconds): Claude Code kills an async hook at 600 s by default, long
+  # before the wait ends; 3600 outlasts IDLE_S plus one poll.
+  add_hook Stop "$CLAUDE_REF/scripts/handoff-idle-cache.sh" "" '{"async":true,"asyncRewake":true,"timeout":3600}'
 
   echo ""
   echo "  Done! Open a new terminal and run 'claude' to start."
