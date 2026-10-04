@@ -237,6 +237,13 @@ ledger_render() {
   [ -s "$_ledger" ] || return 0
 
   _body=$(awk -F'\t' -v now="$_n" -v cap="$LEDGER_MAX_ITEMS" -v trail="$LEDGER_TRAIL_LINKS" '
+    function item(id,   age, label) {
+      age = now - born[id]
+      if (age <= 0) label=sprintf("opened at link %s", born[id])
+      else if (age == 1) label=sprintf("opened at link %s, carried 1 link", born[id])
+      else label=sprintf("opened at link %s, carried %d links", born[id], age)
+      printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
+    }
     $3!="NOTE" && $7!="retro" { if ($2+0 > lastwrite) lastwrite=$2+0 }
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
@@ -245,20 +252,25 @@ ledger_render() {
     $3=="NOTE"    { e++; ev[e]=sprintf("link %s  note — %s", $2, $6); evn[e]=$2+0; evt[e]=$6; next }
     END {
       if (charter != "") printf "CHARTER (set at link %s): %s\n\n", charter_n, charter
-      n=0
+      # Every open OWED renders, and the cap bounds only the RULEs, newest
+      # first. The cap used to keep the OLDEST open items: on one real chain
+      # at link 45 it hid 9 of 12 open OWED, all opened after 24 RULEs. An OWED
+      # is a decision the owner still has to make; hiding it is the decay this
+      # file exists to stop. openset stays complete for the trajectory below.
       for (i=1; i<=k; i++) {
         id=order[i]
         if (id in closed) continue
-        n++
         openset[id]=1
-        if (n > cap) { extra++; continue }
-        age = now - born[id]
-        if (age <= 0) label=sprintf("opened at link %s", born[id])
-        else if (age == 1) label=sprintf("opened at link %s, carried 1 link", born[id])
-        else label=sprintf("opened at link %s, carried %d links", born[id], age)
-        printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
+        if (type[id] == "OWED") item(id)
       }
-      if (extra > 0) printf "  ... and %d more open items, not shown (cap %d). The list is too long: close what is settled.\n", extra, cap
+      n=0
+      for (i=k; i>=1; i--) {
+        id=order[i]
+        if (id in closed || type[id] == "OWED") continue
+        if (++n > cap) { extra++; continue }
+        item(id)
+      }
+      if (extra > 0) printf "  ... and %d older RULE item%s, not shown (cap %d). The list is too long: close what is settled.\n", extra, (extra==1?"":"s"), cap
 
       # The trajectory. Bounded on purpose: a long chain would otherwise inject
       # its whole history every link, which is the accumulate-everything design

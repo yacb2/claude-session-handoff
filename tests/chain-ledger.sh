@@ -612,17 +612,46 @@ else
   no "LG5: d1 matched inside d1abc (or the real match was lost)"
   printf '%s\n' "$R" | grep 'bears\|more entr' | sed 's/^/     /'
 fi
-# The exception must also hold for items past the display cap.
+# The exception must also hold for items past the display cap. RULEs render
+# newest-first, so d1 is the one held back.
 box
 LG="$SANDBOX/lg3.ledger"
-: > "$SANDBOX/e3"; i=1; while [ $i -le 26 ]; do printf 'OPEN OWED item number %s\n' "$i" >> "$SANDBOX/e3"; i=$((i+1)); done
+: > "$SANDBOX/e3"; i=1; while [ $i -le 26 ]; do printf 'OPEN RULE item number %s\n' "$i" >> "$SANDBOX/e3"; i=$((i+1)); done
 sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e3" 1 session
-printf 'TURN old note about d26 specifically\n' > "$SANDBOX/e4"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e4" 2 session
+printf 'TURN old note about d1 specifically\n' > "$SANDBOX/e4"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e4" 2 session
 R=$(LEDGER_TRAIL_LINKS=1 sh "$LEDGER_SH" render "$LG" 9)
-if printf '%s' "$R" | grep -q 'd26 specifically.*still bears'; then
+if printf '%s' "$R" | grep -q 'd1 specifically.*still bears'; then
   ok "LG6: an entry naming an open item beyond the cap is still carried forward"
 else
   no "LG6: the still-bears exception is off for items past the display cap"
+fi
+# Over the cap the newest items render, not the oldest. Measured on a real
+# work_hours chain: at link 45 the cap hid 9 of its 12 open OWED items, all of
+# them opened after the first 24 RULEs.
+box
+LG="$SANDBOX/lg4.ledger"
+i=1; while [ $i -le 30 ]; do
+  printf 'OPEN RULE rule from link %s\n' "$i" > "$SANDBOX/e5"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e5" "$i" session
+  i=$((i+1))
+done
+R=$(sh "$LEDGER_SH" render "$LG" 31)
+if printf '%s' "$R" | grep -q 'd30 *RULE .*rule from link 30$'; then
+  ok "LG7: over the cap, the newest RULE renders"
+else
+  no "LG7: over the cap, the newest RULE was hidden"
+  printf '%s\n' "$R" | grep 'RULE\|not shown' | tail -3 | sed 's/^/     /'
+fi
+box
+LG="$SANDBOX/lg5.ledger"
+: > "$SANDBOX/e6"; i=1; while [ $i -le 25 ]; do printf 'OPEN RULE early rule %s\n' "$i" >> "$SANDBOX/e6"; i=$((i+1)); done
+sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e6" 1 session
+printf 'OPEN OWED decide the late question\n' > "$SANDBOX/e7"; sh "$LEDGER_SH" apply "$LG" "$SANDBOX/e7" 26 session
+R=$(sh "$LEDGER_SH" render "$LG" 27)
+if printf '%s' "$R" | grep -q 'd26 *OWED .*decide the late question$'; then
+  ok "LG8: an OWED opened after the cap filled with RULEs still renders"
+else
+  no "LG8: an OWED past the cap was hidden"
+  printf '%s\n' "$R" | grep 'OWED\|not shown' | sed 's/^/     /'
 fi
 
 # --- Case R1b: the retro is handed what is already open --------------------
