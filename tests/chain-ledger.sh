@@ -466,7 +466,9 @@ link R2 'chain r' '' 'NOTE link ended model-free — bare handoff.'
 if printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO' \
   && printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-retro-filter.py'" \
   && printf '%s' "$CTX" | grep -q "'$REPO/scripts/handoff-ledger.sh' apply" \
-  && printf '%s' "$CTX" | grep -q "$SANDBOX/.claude/projects/-w-proj-under-test/R1.jsonl"; then
+  && printf '%s' "$CTX" | grep -q "$SANDBOX/.claude/projects/-w-proj-under-test/R1.jsonl" \
+  && printf '%s' "$CTX" | grep -q 'No ledger delta reached' \
+  && grep -q '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.R1.ledger"; then
   ok "R: the retro block is emitted, with absolute script paths and the right transcript"
 else
   no "R: the retro block was missing or pointed at the wrong transcript"
@@ -628,15 +630,21 @@ fi
 # The digest has the ledger block cut out, so the subagent cannot know what the
 # chain carries and re-opens it in other words (measured: 2 of 3 lines on the
 # first retro'd chain). The open items travel inside the retro instruction.
+# U1 is a first link that RECEIVES the item at its start, so the floor stamps it
+# link 1 — the link U2's retro is about. U1 wrote nothing itself, so the retro
+# must stay the full one and the NOTE must be written (BL-033 Shape B's
+# boundary: R2b's narrowing is for rows a session wrote, not rows it received).
 retro_box
 link U1 'chain u' 'OPEN OWED decide the widget colour'
 fake_transcript U1
 link U2 'chain u' '' 'NOTE link ended model-free — bare handoff.'
 _retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
-if printf '%s' "$_retro" | grep -q 'd1 *OWED .*decide the widget colour'; then
+if printf '%s' "$_retro" | grep -q 'd1 *OWED .*decide the widget colour' \
+  && printf '%s' "$_retro" | grep -q 'No ledger delta reached' \
+  && grep -q '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.U1.ledger"; then
   ok "R1b: the retro block carries the open items so the agent does not re-open them"
 else
-  no "R1b: the retro block did not list the chain's open items"
+  no "R1b: the retro lost the open items, or narrowed over rows its link only received"
   printf '%s\n' "$_retro" | sed 's/^/     /' | head -40
 fi
 
@@ -663,6 +671,71 @@ if ! printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO' \
   ok "R2: a link whose model wrote deltas gets no retro — the account is already in hand"
 else
   no "R2: the retro fired over deltas a model had already written"
+fi
+
+# --- Case R2b: a link that wrote mid-session, then handed off bare (BL-033) --
+#
+# The rows went straight into the ledger, so there is no delta file and the
+# retro still fires — rightly, for whatever that link decided after them. But
+# it must not say nothing reached the record, the NOTE must not claim no
+# session wrote, and the agent must see those rows so it recovers only the rest.
+# backdate <session-id>: move that link's start into the past — its record and
+# every ledger row written so far. A session writes mid-session well after its
+# start; the fixture writes in the same second.
+backdate() {
+  _cf="$SANDBOX/.claude/handoff-chains/$KEY.jsonl"
+  jq -c --arg s "$1" 'if .session == $s then .at = "2000-01-01T00:00:00Z" else . end' \
+    "$_cf" > "$_cf.tmp" && mv "$_cf.tmp" "$_cf"
+  for _l in "$SANDBOX"/.claude/handoff-chains/*.ledger; do
+    [ -f "$_l" ] || continue
+    awk 'BEGIN { FS = OFS = "\t" } { $1 = "2000-01-01T00:00:00Z" } 1' "$_l" > "$_l.tmp" \
+      && mv "$_l.tmp" "$_l"
+  done
+}
+retro_box
+link V1 'chain v' ''
+fake_transcript V1
+link V2 'chain v' ''
+fake_transcript V2
+backdate V2
+printf 'TURN decided mid-session\nOPEN OWED pick a colour\n' > "$SANDBOX/mid"
+sh "$LEDGER_SH" apply "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" "$SANDBOX/mid" 2
+link V3 'chain v' '' 'NOTE link ended model-free — bare handoff.'
+_retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
+if printf '%s' "$_retro" | grep -q 'PREDECESSOR RETRO' \
+  && ! printf '%s' "$_retro" | grep -q 'No ledger delta reached' \
+  && ! grep -q '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" \
+  && printf '%s' "$_retro" | grep -q '^ *TURN decided mid-session$' \
+  && printf '%s' "$_retro" | grep -q '^ *OPEN d1 OWED pick a colour$'; then
+  ok "R2b: mid-session rows narrow the retro to what is missing, with no false NOTE"
+else
+  no "R2b: a link with mid-session rows got the full retro or the model-free NOTE"
+  grep '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.V1.ledger" | sed 's/^/     /'
+  printf '%s\n' "$_retro" | head -12 | sed 's/^/     /'
+fi
+
+# --- Case R2c: the same at link 1, which also holds the rows it received -----
+#
+# A first link's start stamps what it receives as link 1 too (the floor), so at
+# link 2 "rows stamped link 1" mixes both. Only the rows written after that
+# link started are its own; R1b is the same boundary with none of them.
+retro_box
+link W1 'chain w' 'CHARTER received at the start of link 1'
+fake_transcript W1
+backdate W1
+printf 'TURN decided mid-session at link 1\n' > "$SANDBOX/mid"
+sh "$LEDGER_SH" apply "$SANDBOX/.claude/handoff-chains/$KEY.W1.ledger" "$SANDBOX/mid" 1
+link W2 'chain w' '' 'NOTE link ended model-free — bare handoff.'
+_retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
+if printf '%s' "$_retro" | grep -q 'PREDECESSOR RETRO' \
+  && ! printf '%s' "$_retro" | grep -q 'No ledger delta reached' \
+  && ! grep -q '	NOTE	' "$SANDBOX/.claude/handoff-chains/$KEY.W1.ledger" \
+  && printf '%s' "$_retro" | grep -q '^ *TURN decided mid-session at link 1$' \
+  && ! printf '%s' "$_retro" | grep -q 'received at the start'; then
+  ok "R2c: at link 2 the retro lists what link 1 wrote, not what it received"
+else
+  no "R2c: link 1's received rows were listed as its own, or its own were missed"
+  printf '%s\n' "$_retro" | head -12 | sed 's/^/     /'
 fi
 
 # --- Case R3: nothing to read degrades to silence --------------------------

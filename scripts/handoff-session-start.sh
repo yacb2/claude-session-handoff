@@ -261,20 +261,6 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
       TITLE="↻${N} · ${SLUG}"
     fi
   fi
-
-  RECORD=$(jq -nc \
-    --arg chain "$CHAIN" \
-    --argjson n "$N" \
-    --arg slug "$SLUG" \
-    --arg session "$SESSION_ID" \
-    --arg prev "$PREV" \
-    --arg wrapper "$WRAPPER_ID" \
-    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg sibling "$SIBLING" \
-    --arg clean "$CLEAN" \
-    '{chain:$chain, n:$n, slug:$slug, session:$session, prev:$prev, wrapper:$wrapper, at:$at}
-     + (if $sibling == "" then {} else {sibling: true} end)
-     + (if $clean == "" then {} else {clean: true} end)' 2>/dev/null)
 fi
 
 # `dirname "$0"` is relative when the hook was invoked by a relative path, and
@@ -386,6 +372,25 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
     # receives deltas.
     WROTE_AT=$(( ${N:-1} - 1 ))
     [ "$WROTE_AT" -ge 1 ] || WROTE_AT=1
+    # Rows that link wrote straight into the ledger mid-session, in delta
+    # syntax. Read before the delta file is applied, so it holds only those.
+    # A link can do that and still end bare: no delta file, so the retro fires,
+    # but its NOTE and the retro's "nothing reached the record" would be false.
+    # Not a NOTE, not a retro row — the hook's own NOTE is `session` too
+    # (BL-033). And written after that link STARTED: at link 2 the floor above
+    # stamped what link 1 received at its start as link 1 too, and those rows
+    # are not its own. Its record's `at` is taken after this apply (see RECORD
+    # below), so every row the start wrote is <= it. No record, nothing applied
+    # at its start. Covered by chain-ledger.sh R1b, R2b and R2c.
+    _prev_at=$(printf '%s' "${PARENT:-}" | jq -r '.at // empty' 2>/dev/null)
+    OWN_ROWS=""
+    [ -f "$LEDGER_FILE" ] && OWN_ROWS=$(awk -F'\t' -v n="$WROTE_AT" -v at="$_prev_at" '
+      $2 == n && $3 != "NOTE" && $7 != "retro" && (at == "" || $1 > at) {
+        printf "     %s", $3
+        if ($4 != "-") printf " %s", $4
+        if ($5 != "-") printf " %s", $5
+        printf " %s\n", $6
+      }' "$LEDGER_FILE" 2>/dev/null)
     _before=0
     [ -f "$LEDGER_FILE" ] && _before=$(wc -c < "$LEDGER_FILE" 2>/dev/null | tr -d ' ')
     # Removed only once apply says it appended: the delta file is the outgoing
@@ -398,13 +403,33 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
     # Applied after the model's own deltas and stamped the same link: the
     # pointer is about that same link, and where both exist the model's account
     # is the one that should read first.
-    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$MECH_FILE" "$WROTE_AT" 2>/dev/null
+    [ -n "$OWN_ROWS" ] \
+      || sh "$LEDGER_SH" apply "$LEDGER_FILE" "$MECH_FILE" "$WROTE_AT" 2>/dev/null
     LEDGER_BLOCK=$(sh "$LEDGER_SH" render "$LEDGER_FILE" "${N:-1}" 2>/dev/null)
   fi
 fi
 # Unconditional: a pointer that survives a skipped branch would be stamped on
 # the NEXT link, saying "model-free" of a link whose model wrote deltas.
 rm -f "$MECH_FILE"
+
+# Built here, after the ledger apply, and not with the lineage above: `at` must
+# not precede the rows this start wrote, or a second boundary crossed in
+# between reads them as the session's own at the next link (OWN_ROWS above).
+if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
+  RECORD=$(jq -nc \
+    --arg chain "$CHAIN" \
+    --argjson n "$N" \
+    --arg slug "$SLUG" \
+    --arg session "$SESSION_ID" \
+    --arg prev "$PREV" \
+    --arg wrapper "$WRAPPER_ID" \
+    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg sibling "$SIBLING" \
+    --arg clean "$CLEAN" \
+    '{chain:$chain, n:$n, slug:$slug, session:$session, prev:$prev, wrapper:$wrapper, at:$at}
+     + (if $sibling == "" then {} else {sibling: true} end)
+     + (if $clean == "" then {} else {clean: true} end)' 2>/dev/null)
+fi
 
 if [ -n "$LEDGER_BLOCK" ]; then
   append_block "$LEDGER_BLOCK"
@@ -552,14 +577,26 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
       # itself. So the open items travel with the instruction instead.
       RETRO_OPEN=$(printf '%s\n' "$LEDGER_BLOCK" | grep -E '^  d[0-9]+ +(OWED|RULE) ' | sed 's/^/   /')
       [ -n "$RETRO_OPEN" ] || RETRO_OPEN='     (none open)'
-      RETRO_BLOCK=$(printf '%s\n' \
-'=== PREDECESSOR RETRO — RUN THIS BEFORE ANSWERING ===' \
+      if [ -n "${OWN_ROWS:-}" ]; then
+        RETRO_INTRO=$(printf '%s\n' \
+'The previous link of this chain wrote these rows to the ledger mid-session and' \
+'then ended on a bare `handoff`, so nothing it decided after them reached the' \
+'record:' \
+"$OWN_ROWS" \
+'Its transcript is on disk and reading it is cheap. Recover only what is not' \
+'among those rows, and paste them to the subagent with the open items below.')
+      else
+        RETRO_INTRO=$(printf '%s\n' \
 'No ledger delta reached the record for the previous link of this chain — a bare' \
 '`handoff` or `handoff: <text>` bypasses the model entirely, and a skill-path' \
 'handoff can leave its delta block unsubstituted. So the ledger holds nothing' \
 'that link decided. Its transcript is on disk and' \
 'reading it is cheap; recovering it now is the point of running the retro here' \
-'rather than making the dying session pay for it.' \
+'rather than making the dying session pay for it.')
+      fi
+      RETRO_BLOCK=$(printf '%s\n' \
+'=== PREDECESSOR RETRO — RUN THIS BEFORE ANSWERING ===' \
+"$RETRO_INTRO" \
 '' \
 '1) Build the digest. Mechanical, no model, well under a second even on a' \
 '   260 MB transcript. The umask is not optional: the digest is up to 200 KB of' \
