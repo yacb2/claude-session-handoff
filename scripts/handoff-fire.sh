@@ -82,8 +82,9 @@ awk -v p="$P_TMP" -v d="$D_TMP" '
 ' || { rm -f "$P_TMP" "$D_TMP"; exit 1; }
 
 # A brief with no non-blank line would seed the successor with nothing and still
-# close this session: refuse before any touch.
-if ! grep -q '[^[:space:]]' "$P_TMP"; then
+# close this session: refuse before any touch. The SKILL.md template's
+# placeholder line, emitted unfilled, counts as nothing.
+if ! grep -v '^[[:space:]]*<THE HANDOFF PROMPT HERE>[[:space:]]*$' "$P_TMP" | grep -q '[^[:space:]]'; then
   rm -f "$P_TMP" "$D_TMP"
   echo "handoff: the brief is empty (nothing before the __HANDOFF_DELTA__ line). Nothing was written and this session will not close." >&2
   exit 1

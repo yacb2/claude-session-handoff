@@ -1545,7 +1545,9 @@ SKILL_BLOCK=$(awk '
   insec && /^```sh$/ { inblock = 1; next }
   inblock && /^```$/ { exit }
   inblock            { print }
-' "$SKILL_MD")
+' "$SKILL_MD" | sed 's/^<THE HANDOFF PROMPT HERE>$/a filled brief/')
+# The placeholder is filled as a model would fill it: emitted unfilled it is
+# refused as an empty brief (BL-049, the FIRE empty-payload cases).
 
 # BL-041: the block now calls the installed script, so a sandbox HOME has to
 # carry it where the block looks (and *.sh is not a sentinel: see run_block).
@@ -1947,9 +1949,9 @@ else no "FIRE: no-separator brief (delta=$F_HAS_DELTA payload=[$F_PAYLOAD])"; fi
 # session: refuse before any touch.
 for _v in "" "__HANDOFF_DELTA__
 OPEN OWED x
-" "   
+" "
 
-"; do
+" "<THE HANDOFF PROMPT HERE>${NL}__HANDOFF_DELTA__${NL}TURN a${NL}" "${NL}  <THE HANDOFF PROMPT HERE>  ${NL}"; do
   fire "$_v"
   if [ "$F_RC" != 0 ] && [ "$F_SENT" = 0 ] && [ -z "$F_PAYLOAD" ] && [ "$F_HAS_DELTA" = 0 ] && [ "$F_HAS_PAYLOAD" = 0 ]; then
     ok "FIRE: a brief with no non-blank line is refused and leaves nothing"
