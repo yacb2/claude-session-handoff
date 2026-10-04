@@ -526,6 +526,27 @@ else
   no "KD: apply exit status did not report the failed append (rc=$_rc rc2=$_rc2)"
 fi
 
+# --- Case SD: a delta older than the wrapper is not this wrapper's ----------
+#
+# The delta file is keyed by wrapper PID, and eval-pty left them behind. A later
+# wrapper that reuses the PID applied a dead run's deltas to a real ledger, and
+# the stale file also read as "a model wrote deltas", suppressing the retro.
+# The bare link is Case R's shape: no model delta, the mechanical NOTE.
+retro_box
+link SD1 'chain sd' ''
+fake_transcript SD1
+printf 'OPEN OWED stale from a dead wrapper\n' > "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
+touch -t 202001010000 "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
+link SD2 'chain sd' '' 'NOTE link ended model-free — bare handoff.'
+if ! cat "$SANDBOX"/.claude/handoff-chains/*.ledger 2>/dev/null | grep -q 'dead wrapper' \
+  && ! printf '%s' "$CTX" | grep -q 'dead wrapper' \
+  && printf '%s' "$CTX" | grep -q 'PREDECESSOR RETRO'; then
+  ok "SD: a delta older than the wrapper is discarded, and the retro still fires"
+else
+  no "SD: a stale delta from a reused wrapper PID was applied or silenced the retro"
+  printf '%s\n' "$CTX" | grep -n 'dead wrapper\|RETRO' | sed 's/^/     /'
+fi
+
 # --- Case NL: CHAIN CONTEXT names a ledger only when one exists ------------
 #
 # The path was printed unconditionally, so a skill-path chain that had never

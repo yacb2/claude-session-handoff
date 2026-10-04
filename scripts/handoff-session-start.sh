@@ -317,6 +317,22 @@ shq() {
 # ledger the one artifact discarded on a failure that preserves everything else.
 DELTA_FILE="${HOME}/.claude/tmp/handoff-ledger-${WRAPPER_ID}"
 
+# A delta older than the wrapper process was not written under it: the file is
+# keyed by PID, and a dead run (eval-pty left 26) gets applied to a real ledger
+# when a later wrapper reuses that PID. Discarded, not kept — it was never this
+# wrapper's copy, so the keep-on-degrade rule above does not reach it. The age
+# is `ps -o etime=` ([[dd-]hh:]mm:ss) in minutes plus one, because BSD
+# `find -mmin` rounds a file's age UP. No ps, or no such process: kept, as
+# before. Covered by chain-ledger.sh SD.
+if [ -f "$DELTA_FILE" ]; then
+  _age=$(ps -o etime= -p "$WRAPPER_ID" 2>/dev/null | awk -F'[-:]' '
+    NF == 4 { print $1 * 1440 + $2 * 60 + $3 + 1 }
+    NF == 3 { print $1 * 60 + $2 + 1 }
+    NF == 2 { print $1 + 1 }')
+  [ -n "$_age" ] && [ -n "$(find "$DELTA_FILE" -mmin +"$_age" 2>/dev/null)" ] \
+    && rm -f "$DELTA_FILE"
+fi
+
 # The prompt hook's mechanical pointer, kept in a file of its own rather than
 # appended to the delta file. That separation is load-bearing in two places and
 # neither is obvious: `[ -s "$DELTA_FILE" ]` below is the predicate for "a model

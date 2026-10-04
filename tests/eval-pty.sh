@@ -356,7 +356,8 @@ run_one() {
     set timeout [expr {$TIMEOUT + 30}]
     set env(CLAUDE_HANDOFF_ID) [pid]
     set skill_flag "$TMP_DIR/handoff-flag-[pid]"
-    set skill_files [list \$skill_flag "$TMP_DIR/handoff-payload-[pid]" "$TMP_DIR/handoff-exit-[pid]"]
+    set skill_files [list \$skill_flag "$TMP_DIR/handoff-payload-[pid]" "$TMP_DIR/handoff-exit-[pid]" \
+      "$TMP_DIR/handoff-ledger-[pid]" "$TMP_DIR/handoff-title-[pid]" "$TMP_DIR/handoff-ledger-mech-[pid]"]
     proc flag_seen {} {
       global skill_flag
       if {[file exists \$skill_flag]} { exec touch "$FLAG_FILE"; return 1 }
