@@ -1754,9 +1754,16 @@ else no "BL037: subdirectory cwd (out=[$PAYLOAD_OUT])"; fi
 # Layer: script integration (real script, sandbox HOME, real ancestry walk).
 fire() {
   F_HOME=$(mktemp -d)
+  F_D="$F_HOME/.claude/tmp"
+  # $2 = seed: a delta and a payload kept from an earlier link already sit there.
+  if [ "${2:-}" = seed ]; then
+    mkdir -p "$F_D"
+    printf 'OPEN OWED keep\n' > "$F_D/handoff-ledger-$TEST_PID"
+    printf 'prior\n' > "$F_D/handoff-payload-$TEST_PID"
+  fi
   F_OUT=$(printf '%s' "$1" | HOME="$F_HOME" CLAUDE_HANDOFF_ID="$TEST_PID" sh "$REPO/scripts/handoff-fire.sh" 2>&1)
   F_RC=$?
-  F_D="$F_HOME/.claude/tmp"
+  F_LEFT=$(ls -A "$F_D" 2>/dev/null | tr '\n' ' ')
   F_PAYLOAD=$(cat "$F_D/handoff-payload-$TEST_PID" 2>/dev/null)
   F_DELTA=$(cat "$F_D/handoff-ledger-$TEST_PID" 2>/dev/null)
   F_HAS_PAYLOAD=0; [ -f "$F_D/handoff-payload-$TEST_PID" ] && F_HAS_PAYLOAD=1
@@ -1834,6 +1841,17 @@ OPEN OWED x
   if [ "$F_RC" != 0 ] && [ "$F_SENT" = 0 ] && [ -z "$F_PAYLOAD" ] && [ "$F_HAS_DELTA" = 0 ] && [ "$F_HAS_PAYLOAD" = 0 ]; then
     ok "FIRE: a brief with no non-blank line is refused and leaves nothing"
   else no "FIRE: empty payload went through (rc=$F_RC sent=$F_SENT payload=[$F_PAYLOAD] delta=$F_HAS_DELTA file=$F_HAS_PAYLOAD)"; fi
+done
+
+# A refused brief touches nothing already there: a degraded start keeps the
+# outgoing delta as its only copy, and the next link under the same wrapper
+# fires over it.
+for _v in "" "${NL}__HANDOFF_DELTA__${NL}TURN a${NL}"; do
+  fire "$_v" seed
+  if [ "$F_RC" != 0 ] && [ "$F_SENT" = 0 ] && [ "$F_DELTA" = "OPEN OWED keep" ] && [ "$F_PAYLOAD" = "prior" ] \
+     && [ "$F_LEFT" = "handoff-ledger-$TEST_PID handoff-payload-$TEST_PID " ]; then
+    ok "FIRE: a refused brief leaves an earlier delta and payload byte-identical"
+  else no "FIRE: refusal touched kept files (rc=$F_RC sent=$F_SENT payload=[$F_PAYLOAD] delta=[$F_DELTA] left=[$F_LEFT])"; fi
 done
 
 # The separator is compared after trimming [ \t\r], like handoff-ledger.sh does

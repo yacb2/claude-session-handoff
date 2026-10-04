@@ -65,25 +65,31 @@ DELTA_FILE="$DIR/handoff-ledger-$CLAUDE_HANDOFF_ID"
 FLAG_FILE="$DIR/handoff-flag-$CLAUDE_HANDOFF_ID"
 EXIT_TRIGGER="$DIR/handoff-exit-$CLAUDE_HANDOFF_ID"
 
-# awk creates the delta file only when a line reaches it, so an empty or absent
-# delta section leaves no file (and an older stale one is not touched).
-rm -f "$PAYLOAD_FILE"
-: > "$PAYLOAD_FILE" || exit 1
+# Split into .tmp siblings and move them into place only once the brief passes,
+# so a refusal leaves whatever was already there (a degraded start keeps the
+# outgoing delta as its only copy). awk creates the delta only when a line
+# reaches it, so an empty or absent delta section leaves an older one untouched.
+P_TMP="$PAYLOAD_FILE.tmp"
+D_TMP="$DELTA_FILE.tmp"
+rm -f "$P_TMP" "$D_TMP"
+: > "$P_TMP" || exit 1
 # The separator is compared after trimming [ \t\r], as handoff-ledger.sh does for
 # delta lines, so an indented or CRLF line still splits.
-awk -v p="$PAYLOAD_FILE" -v d="$DELTA_FILE" '
+awk -v p="$P_TMP" -v d="$D_TMP" '
   { t = $0; gsub(/^[ \t\r]+|[ \t\r]+$/, "", t) }
   !seen && t == "__HANDOFF_DELTA__" { seen = 1; next }
   { if (seen) print > d; else print > p }
-' || exit 1
+' || { rm -f "$P_TMP" "$D_TMP"; exit 1; }
 
 # A brief with no non-blank line would seed the successor with nothing and still
 # close this session: refuse before any touch.
-if ! grep -q '[^[:space:]]' "$PAYLOAD_FILE"; then
-  rm -f "$PAYLOAD_FILE" "$DELTA_FILE"
+if ! grep -q '[^[:space:]]' "$P_TMP"; then
+  rm -f "$P_TMP" "$D_TMP"
   echo "handoff: the brief is empty (nothing before the __HANDOFF_DELTA__ line). Nothing was written and this session will not close." >&2
   exit 1
 fi
+mv -f "$P_TMP" "$PAYLOAD_FILE" || exit 1
+[ -f "$D_TMP" ] && { mv -f "$D_TMP" "$DELTA_FILE" || exit 1; }
 
 touch "$FLAG_FILE"
 # Signal, never kill: the wrapper's watcher polls this and signals claude itself.
