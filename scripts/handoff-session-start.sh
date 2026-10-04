@@ -43,13 +43,35 @@ SESSION_MARKER="${HOME}/.claude/tmp/handoff-session-${WRAPPER_ID}"
 MARKER_PREV=""
 [ -f "$SESSION_MARKER" ] && MARKER_PREV=$(head -1 "$SESSION_MARKER" 2>/dev/null | tr -d '\000-\037')
 #
+# Only the wrapper's own session may write it. A headless `claude -p` (a script,
+# the SDK) inherits CLAUDE_HANDOFF_ID, and its start overwrote the marker, so the
+# next handoff named the headless cell as predecessor and split the chain
+# (BL-036). Invariant: the wrapper backgrounds the claude binary itself, so the
+# interactive claude is the wrapper's direct child — under claude-abduco.sh too,
+# where abduco runs the wrapper, not claude. So the nearest `claude` ancestor of
+# this hook must have the wrapper as its parent. Where ps cannot run (BL-030) or
+# no ancestor is named claude (an npm install runs as node), the tree tells us
+# nothing and the marker is written as before. Covered by hook-guard.sh AL5, AL6.
+owns_marker() {
+  _pid=$$
+  while :; do
+    _pid=$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')
+    case "$_pid" in ''|0|1) return 0 ;; esac
+    case "$(ps -o comm= -p "$_pid" 2>/dev/null)" in
+      claude|*/claude)
+        [ "$(ps -o ppid= -p "$_pid" 2>/dev/null | tr -d ' ')" = "$WRAPPER_ID" ]
+        return ;;
+    esac
+  done
+}
+#
 # The hook is registered for `resume` for this marker alone. A resume is not the
 # fresh start a handoff launches, so it stops here: a payload or title file
 # waiting under this wrapper belongs to that start. An empty source (no stdin)
 # falls through, as before. Covered by hook-guard.sh Case AL4.
 if command -v jq >/dev/null 2>&1; then
   _sid=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
-  if [ -n "$_sid" ]; then
+  if [ -n "$_sid" ] && owns_marker; then
     mkdir -p "${HOME}/.claude/tmp" 2>/dev/null
     printf '%s\n' "$_sid" > "$SESSION_MARKER" 2>/dev/null
   fi

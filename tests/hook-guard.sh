@@ -597,8 +597,17 @@ else
 fi
 
 # --- incoming half: handoff-session-start.sh --------------------------------
-SS_CHID=77778
+# The hook writes the session marker only when its claude ancestor is the
+# wrapper's direct child (BL-036), so ss_run builds that tree for real: this
+# shell stands in for the wrapper, and a `claude`-named link to sh runs the
+# hook. It must be a simple command of THIS shell — `$( )` or a pipeline would
+# fork a subshell that becomes its parent — and `; exit $?` keeps sh from
+# exec'ing the hook in place, which would collapse the claude level.
+SS_CHID=$TEST_PID
 SS_KEY=$CHAIN_KEY
+mkdir -p "$NOJQ/fake"
+ln -s "$(command -v sh)" "$NOJQ/fake/claude"
+SS_CLAUDE="$NOJQ/fake/claude"
 
 # ss_box <title-file> <payload> <chain-lines>   (empty string = do not create)
 ss_box() {
@@ -614,9 +623,11 @@ ss_box() {
 
 # ss_run <session-id> <path-override> [source]   (source defaults to startup)
 ss_run() {
-  SS_OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"%s"}' \
-    "$1" "$CHAIN_CWD" "${3:-startup}" \
-    | HOME="$SSBOX" PATH="$2" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" 2>/dev/null)
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"%s"}' \
+    "$1" "$CHAIN_CWD" "${3:-startup}" > "$SSBOX/ss-in"
+  HOME="$SSBOX" PATH="$2" CLAUDE_HANDOFF_ID="$SS_CHID" \
+    "$SS_CLAUDE" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SSBOX/ss-in" > "$SSBOX/ss-out" 2>/dev/null
+  SS_OUT=$(cat "$SSBOX/ss-out")
   SS_TITLE=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.sessionTitle // empty' 2>/dev/null)
   SS_REC_FILE="$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
   if [ -f "$SS_REC_FILE" ]; then
@@ -668,7 +679,7 @@ rm -rf "$SSBOX"
 # slug rendered bare. `↻1 · x` would be a lie about lineage, and inheriting the
 # previous chain's ordinal across a deliberate break is what D3 rules out.
 ss_box "clean=1
-slug=feature/lineage 14:05" "" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+slug=feature/lineage 14:05" "" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}'
 ss_run "SESS-CLEAN" "$PATH"
 if [ "$SS_TITLE" = "feature/lineage 14:05" ] \
   && [ "$(ss_field .n)" = "1" ] && [ "$(ss_field .clean)" = "true" ] \
@@ -685,7 +696,7 @@ rm -rf "$SSBOX"
 # out of, and a title-parsing implementation restarts the count from scratch
 # there. The record is the only source no rename can corrupt.
 ss_box "prev=SESS-A
-slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}'
 ss_run "SESS-NEXT" "$PATH"
 if [ "$SS_TITLE" = "↻3 · Refactor auth" ] \
   && [ "$(ss_field .n)" = "3" ] && [ "$(ss_field .chain)" = "c1" ] \
@@ -708,8 +719,8 @@ rm -rf "$SSBOX"
 # it; do not renumber, and do not rewrite the sibling that got there first —
 # the file is append-only.
 ss_box "prev=SESS-A
-slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}
-{"chain":"c1","n":3,"slug":"Refactor auth","session":"SESS-B","prev":"SESS-A","wrapper":"77778","at":"2026-08-19T11:00:00Z"}'
+slug=Refactor auth" "the brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}
+{"chain":"c1","n":3,"slug":"Refactor auth","session":"SESS-B","prev":"SESS-A","wrapper":"'"$SS_CHID"'","at":"2026-08-19T11:00:00Z"}'
 ss_run "SESS-FORK" "$PATH"
 AB_FIRST=$(sed -n '2p' "$SS_REC_FILE" 2>/dev/null)
 if [ "$(ss_field .sibling)" = "true" ] && [ "$(ss_field .prev)" = "SESS-A" ] \
@@ -779,7 +790,7 @@ rm -rf "$SSBOX"
 ss_box "" "slug: Plan exec — phase 3
 slug: FORGED
 ## Current goal
-finish the migration" '{"chain":"c9","n":2,"slug":"Plan exec — phase 2","session":"SESS-A","prev":"SESS-0","wrapper":"77778","at":"2026-08-19T10:00:00Z"}'
+finish the migration" '{"chain":"c9","n":2,"slug":"Plan exec — phase 2","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}'
 ss_run "SESS-SKILL" "$PATH"
 if [ "$SS_TITLE" = "↻3 · Plan exec — phase 3" ] \
   && [ "$(ss_field .prev)" = "SESS-A" ] && [ "$(ss_field .chain)" = "c9" ] \
@@ -878,6 +889,44 @@ else
   no "AL4: resume did more than mark (marker=[$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)] title_left=$SS_TITLE_LEFT payload_left=$SS_PAYLOAD_LEFT lines=$SS_LINES out=[$SS_OUT])"
 fi
 rm -rf "$SSBOX"
+
+# Case AL5 — BL-036: a headless `claude -p` (a script, the SDK) launched from a
+# wrapped session inherits CLAUDE_HANDOFF_ID, and its SessionStart overwrote
+# the marker with its own id — so the next skill handoff named the headless
+# cell as its predecessor and split the chain (8 splits in the live store).
+# C1 runs as the wrapped claude's child, which is where the Bash tool puts it.
+ss_box "" "" ""
+ss_run "SESS-S1" "$PATH"
+printf 'slug: Headless cells\n## Current goal\nx' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-S2" "$PATH"
+sed 's/SESS-S2/SESS-C1/' "$SSBOX/ss-in" > "$SSBOX/c1-in"
+HOME="$SSBOX" CLAUDE_HANDOFF_ID="$SS_CHID" "$SS_CLAUDE" -c '"$0" -c "$1" "$2"; exit $?' \
+  "$SS_CLAUDE" 'sh "$0"; exit $?' "$SS_HOOK" < "$SSBOX/c1-in" > /dev/null 2>&1
+AL5_MARKER=$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)
+printf 'slug: Headless cells\n## Current goal\nx' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-S3" "$PATH"
+if [ "$AL5_MARKER" = "SESS-S2" ] && [ "$(ss_field .chain)" = "SESS-S1" ] \
+  && [ "$(ss_field .n)" = "3" ] && [ "$(ss_field .prev)" = "SESS-S2" ]; then
+  ok "AL5: a headless claude under the wrapper leaves the marker, and the chain stays whole"
+else
+  no "AL5: headless start split the chain (marker after C1=[$AL5_MARKER] rec=[$SS_REC])"
+fi
+rm -rf "$SSBOX"
+
+# Case AL6 — where ps cannot run, the tree cannot be read, and the marker is
+# written as before BL-036 (the BL-030 fallback): skipping it would split every
+# chain the way BL-031 did. AL3 is this case's control with ps present.
+P_STUB=$(mktemp -d)
+printf '#!/bin/sh\nexit 127\n' > "$P_STUB/ps"
+chmod +x "$P_STUB/ps"
+ss_box "" "" ""
+ss_run "SESS-NOPS" "$P_STUB:$PATH"
+if [ "$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)" = "SESS-NOPS" ]; then
+  ok "AL6: without a runnable ps the marker is still written"
+else
+  no "AL6: an unrunnable ps dropped the marker ([$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)])"
+fi
+rm -rf "$SSBOX" "$P_STUB"
 
 # Case AE2 — `--clean` without stdin still announces itself. CLEAN was only read
 # inside the lineage gate, which needs session_id, so a stdin-less clean start

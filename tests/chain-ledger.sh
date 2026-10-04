@@ -31,7 +31,15 @@ FAIL=0
 ok() { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$1"; }
 no() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$1"; }
 
-CHID=68821
+# The hook writes the session marker — which every skill-path link below reads
+# for its predecessor — only when its claude ancestor is the wrapper's direct
+# child (BL-036). So this shell stands in for the wrapper and a `claude`-named
+# link to sh runs the hook, as a simple command of THIS shell (see ss_run in
+# hook-guard.sh for why not `$( )` and why `; exit $?`).
+CHID=$$
+FAKE=$(mktemp -d)
+trap 'rm -rf "$FAKE"' EXIT
+ln -s "$(command -v sh)" "$FAKE/claude"
 CWD=/w/proj-under-test
 KEY=$(printf '%s' "$CWD" | tr '/' '-')
 
@@ -61,9 +69,11 @@ link() {
   if [ -n "${4:-}" ]; then
     printf '%s\n' "$4" > "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID"
   fi
-  OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
-    "$1" "$CWD" \
-    | HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" sh "$SS_HOOK" 2>/dev/null)
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+    "$1" "$CWD" > "$SANDBOX/ss-in"
+  HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" \
+    "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+  OUT=$(cat "$SANDBOX/ss-out")
   CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
 }
 
@@ -829,8 +839,11 @@ printf '%s\n' \
 rel_link() {
   printf 'slug: chain z\n\n## Current goal\n\nx\n' \
     > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
-  OUT=$(cd "$REPO" && printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
-    "$1" "$CWD" | HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" sh scripts/handoff-session-start.sh 2>/dev/null)
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+    "$1" "$CWD" > "$SANDBOX/ss-in"
+  HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" "$FAKE/claude" -c 'cd "$1" && sh "$0"; exit $?' \
+    scripts/handoff-session-start.sh "$REPO" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+  OUT=$(cat "$SANDBOX/ss-out")
   CTX=$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
 }
 rel_link Z1
@@ -888,10 +901,8 @@ printf '{"prompt":"handoff","session_id":"E1","cwd":"%s","transcript_path":"%s"}
 
 # Now the arriving session, keyed by the same wrapper id the prompt hook used.
 SANDBOX="$EBOX"
-CHID_SAVE="$CHID"; CHID="$$"
 link E1 'chain e' ''
 link E2 'chain e' ''
-CHID="$CHID_SAVE"
 
 if printf '%s' "$CTX" | grep -q 'note — link ended model-free'; then
   ok "E: the prompt hook's pointer is picked up by the SessionStart hook and rendered"
