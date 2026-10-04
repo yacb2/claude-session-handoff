@@ -1662,7 +1662,8 @@ if contains "$PAYLOAD_OUT" "- f600.txt"; then ok "BL037: a path past the 500th d
 else no "BL037: >500 dirty (out tail=[$(printf '%s' "$PAYLOAD_OUT" | tail -3)])"; fi
 T=$OWNDIR/c.jsonl; own_t "$T"; tl "$T" Bash "{\"command\":\"touch$ALLNAMES\"}"; own_end "$T"
 run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R3" '.cwd=$c')" "$TEST_PID" "$PATH"
-if contains "$PAYLOAD_OUT" "- f050.txt" && ! contains "$PAYLOAD_OUT" "- f051.txt" && contains "$PAYLOAD_OUT" "(550 more not shown)"; then
+if contains "$PAYLOAD_OUT" "- f050.txt" && ! contains "$PAYLOAD_OUT" "- f051.txt" && contains "$PAYLOAD_OUT" "(550 more not shown)" \
+  && contains "$MECH_OUT" "600 uncommitted candidate path(s) found, 50 listed in the payload"; then
   ok "BL037: the list is capped at 50 and says how many more were not shown"
 else no "BL037: cap (out tail=[$(printf '%s' "$PAYLOAD_OUT" | tail -3)])"; fi
 
@@ -1697,6 +1698,46 @@ tl "$OWNDIR/f/subagents/agent-2.jsonl" Write "{\"file_path\":\"$R2/other/o.txt\"
 run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
 if contains "$PAYLOAD_OUT" "- other/o.txt"; then ok "BL037: a corrupt subagent transcript does not hide the readable ones"
 else no "BL037: corrupt subagent file (out=[$PAYLOAD_OUT])"; fi
+
+
+# BL037 round 3.
+# Words anchored somewhere else (~, $VAR, ..) never suffix-match a repo path.
+T=$OWNDIR/g.jsonl; own_t "$T"
+tl "$T" Bash '{"command":"vim ~/elsewhere/scripts/x.sh && cp a $HOME/o/scripts/x.sh && cat ../other-repo/scripts/x.sh"}'
+tl "$T" Write "{\"file_path\":\"$R2/other/o.txt\",\"content\":\"x\"}"
+own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- other/o.txt" && ! contains "$PAYLOAD_OUT" "scripts/x.sh"; then
+  ok "BL037: ~/, \$HOME/ and ../ words do not claim this repo's scripts/x.sh"
+else no "BL037: anchored words (out=[$PAYLOAD_OUT])"; fi
+
+# The status the hook runs must not take the index lock or rewrite the index.
+R4="$OWNDIR/repo4"; mkdir -p "$R4"; git -C "$R4" init -q 2>/dev/null
+printf x > "$R4/tracked.txt"; printf y > "$R4/new.txt"
+git -C "$R4" add tracked.txt && git -C "$R4" -c user.name=t -c user.email=t@t commit -qm i
+touch -t 202001010000 "$R4/tracked.txt"; touch -t 202001010000 "$R4/.git/index"
+mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1"; }
+M0=$(mtime "$R4/.git/index")
+T=$OWNDIR/h.jsonl; own_t "$T"; tl "$T" Write "{\"file_path\":\"$R4/new.txt\",\"content\":\"y\"}"; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R4" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- new.txt" && [ "$(mtime "$R4/.git/index")" = "$M0" ]; then
+  ok "BL037: the hook's git status leaves .git/index untouched"
+else no "BL037: index rewritten or section missing (mtime $M0 -> $(mtime "$R4/.git/index"))"; fi
+
+# A symlinked cwd with the Write given as the physical path is still this repo.
+ln -s "$R2" "$OWNDIR/link"
+PHYS=$(cd "$R2" && pwd -P)
+T=$OWNDIR/i.jsonl; own_t "$T"; tl "$T" Write "{\"file_path\":\"$PHYS/other/o.txt\",\"content\":\"x\"}"; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$OWNDIR/link" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- other/o.txt"; then ok "BL037: a physical file_path under a symlinked cwd is listed"
+else no "BL037: symlinked cwd (out=[$PAYLOAD_OUT])"; fi
+
+# A cwd below the repo root: a relative word is relative to the cwd.
+R5="$OWNDIR/repo5"; mkdir -p "$R5/sub"; git -C "$R5" init -q 2>/dev/null; printf x > "$R5/sub/b.txt"
+T=$OWNDIR/j.jsonl; own_t "$T"; tl "$T" Bash '{"command":"echo x > b.txt"}'; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R5/sub" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- sub/b.txt"; then ok "BL037: a cwd-relative write from a subdirectory is listed under its repo path"
+else no "BL037: subdirectory cwd (out=[$PAYLOAD_OUT])"; fi
 
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

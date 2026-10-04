@@ -450,8 +450,9 @@ if [ -n "$_own_cwd" ]; then
     # matches and is skipped. -uall lists files inside an untracked directory
     # (a bare "dir/" entry would never match), --no-optional-locks keeps a
     # read-only status from taking the index lock under a running peer.
-    # A path with a space is never matched (words are split on it).
-    _own_dirty=$(git --no-optional-locks -C "$_own_cwd" status --porcelain -uall 2>/dev/null | cut -c4- | grep -v '^$')
+    # A path with a space or a non-ASCII byte is never matched (words are split
+    # on both; quotePath=false only stops git from quoting what could not match).
+    _own_dirty=$(git --no-optional-locks -c core.quotePath=false -C "$_own_cwd" status --porcelain -uall 2>/dev/null | cut -c4- | grep -v '^$')
     if [ -n "$_own_dirty" ]; then
       # Repo toplevel, physical and as the cwd spells it: an absolute word only
       # counts as <toplevel>/<path>, so /elsewhere/scripts/x.sh does not claim
@@ -459,16 +460,21 @@ if [ -n "$_own_cwd" ]; then
       _own_up=$(git -C "$_own_cwd" rev-parse --show-cdup 2>/dev/null)
       _own_top_l=$(cd "$_own_cwd/$_own_up" 2>/dev/null && pwd)
       _own_top_p=$(cd "$_own_cwd/$_own_up" 2>/dev/null && pwd -P)
+      _own_pre=$(git -C "$_own_cwd" rev-parse --show-prefix 2>/dev/null)
       printf '%s\n' "$_own_dirty" > "${_own_in}.dirty"
       # One awk pass, not a grep per path (BSD grep -f over ~100 patterns costs
       # ~700 ms on a 1 MB dump). Porcelain order.
-      _own_all=$(tr -c 'A-Za-z0-9_./@+~-' '\n' < "$_own_in" | awk -v df="${_own_in}.dirty" -v tl="$_own_top_l/" -v tp="$_own_top_p/" '
+      _own_all=$(tr -c 'A-Za-z0-9_./@+~$-' '\n' < "$_own_in" | awk -v df="${_own_in}.dirty" -v tl="$_own_top_l/" -v tp="$_own_top_p/" -v pre="$_own_pre" '
         BEGIN { while ((getline l < df) > 0) { d[l] = 1; ord[++n] = l } }
         { w = $0
           if (substr(w, 1, 1) == "/") {
             if (substr(w, 1, length(tl)) == tl) { r = substr(w, length(tl) + 1); if (r in d) hit[r] = 1 }
             if (substr(w, 1, length(tp)) == tp) { r = substr(w, length(tp) + 1); if (r in d) hit[r] = 1 }
             next }
+          # Anchored elsewhere (home, a variable, a parent dir): not ours.
+          if (substr(w, 1, 1) == "~" || substr(w, 1, 1) == "$" || substr(w, 1, 2) == "..") next
+          # Relative to a cwd below the toplevel: prefix it.
+          v = w; sub(/^\.\//, "", v); if ((pre v) in d) hit[pre v] = 1
           while (w != "") { if (w in d) hit[w] = 1; i = index(w, "/"); if (!i) break; w = substr(w, i + 1) } }
         END { for (k = 1; k <= n; k++) if (ord[k] in hit) print ord[k] }')
       rm -f "${_own_in}.dirty"
@@ -536,7 +542,7 @@ if [ "$PAYLOAD" != "--clean" ] && [ -z "$NEW_CHAIN" ]; then
     MECH_WHERE=""
   fi
   if [ "$OWN_COUNT" -gt 0 ]; then
-    MECH_WHERE="$MECH_WHERE; $OWN_COUNT uncommitted candidate path(s) listed in the payload"
+    MECH_WHERE="$MECH_WHERE; $OWN_COUNT uncommitted candidate path(s) found, $((OWN_COUNT > 50 ? 50 : OWN_COUNT)) listed in the payload"
   fi
   printf 'NOTE link ended model-free — %s, so no session wrote deltas for it%s\n' \
     "$MECH_HOW" "$MECH_WHERE" > "$MECH_FILE"
