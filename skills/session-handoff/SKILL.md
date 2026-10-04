@@ -238,7 +238,9 @@ applies.
 
 The script refuses when `$CLAUDE_HANDOFF_ID` is unset, and also when it is set but its wrapper is dead (the wrapper exports it as its own PID and every descendant inherits it, including `--fork-session`, `--resume` and harness jobs), which it detects by walking the parent chain.
 
-stdin is the brief. A line that is exactly `__HANDOFF_DELTA__` ends the brief: what follows is the
+stdin is the brief. The first line that is `__HANDOFF_DELTA__` (surrounding blanks ignored) ends
+the brief wherever it appears, quoted or fenced text included, so never put it alone on a line of
+the brief itself. What follows is the
 ledger deltas, one per line (OPEN / CLOSE / TURN / CHARTER), written to the delta file. The delta
 file exists for the same reason as the payload: this session knows neither its own id nor its chain,
 so the SessionStart hook — the one place chain identity exists — applies it. OMIT the
