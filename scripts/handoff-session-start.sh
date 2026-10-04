@@ -163,6 +163,8 @@ title_field() {
 # stdin is missing, or a deliberate new chain is as silent as a failed one
 # (D3). Covered by hook-guard.sh Case AE2.
 CLEAN=$(title_field clean)
+# `handoff --new: <text>`: a new chain like --clean, but seeded (BL-038).
+NEWCHAIN=$(title_field new)
 
 # Shared by CHAIN CONTEXT and the retro. Newest mtime, never the glob's first
 # match: one session id can resolve to more than one .jsonl, and the path the
@@ -199,7 +201,7 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
   [ -n "$SLUG" ] || SLUG="$PAYLOAD_SLUG"
   SIBLING=""
 
-  if [ "$CLEAN" = "1" ]; then
+  if [ "$CLEAN" = "1" ] || [ "$NEWCHAIN" = "1" ]; then
     # A clean session is a deliberate break, so the ordinal does not carry
     # across it (D3). The chain is named after this session because it is its
     # first link — the only id that is knowable here and stable afterwards.
@@ -354,6 +356,19 @@ LEDGER_FILE=""
 # chain left behind is discarded here rather than applied to the new ledger
 # under a banner that says nothing was seeded. Covered by chain-ledger.sh CL.
 [ "${CLEAN:-}" = "1" ] && rm -f "$DELTA_FILE"
+# `--new:` discards it too, and puts its own CHARTER there for the apply below:
+# the typed text's first line, skipping a `slug:` line and a raw tail. Applied
+# as `hook`: no session wrote it, and ledger-readout.sh counts session writes.
+DELTA_SRC=session
+if [ "${NEWCHAIN:-}" = "1" ]; then
+  rm -f "$DELTA_FILE"
+  DELTA_SRC=hook
+  case "$PAYLOAD" in
+    ''|'[RAW TRANSCRIPT TAIL'*) ;;
+    *) _charter=$(printf '%s\n' "$PAYLOAD" | sed -n '/^[[:space:]]*[Ss]lug:/d; /[^[:space:]]/{p;q;}')
+       [ -n "$_charter" ] && (umask 077; printf 'CHARTER %s\n' "$_charter" > "$DELTA_FILE") ;;
+  esac
+fi
 if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
   LEDGER_FILE="${CHAIN_FILE%.jsonl}.${CHAIN}.ledger"
   LEDGER_SH="${HANDOFF_LEDGER_SH:-$(dirname "$0")/handoff-ledger.sh}"
@@ -395,7 +410,7 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
     [ -f "$LEDGER_FILE" ] && _before=$(wc -c < "$LEDGER_FILE" 2>/dev/null | tr -d ' ')
     # Removed only once apply says it appended: the delta file is the outgoing
     # session's only copy. Covered by chain-ledger.sh KD.
-    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "$WROTE_AT" 2>/dev/null \
+    sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "$WROTE_AT" "$DELTA_SRC" 2>/dev/null \
       && rm -f "$DELTA_FILE"
     _after=0
     [ -f "$LEDGER_FILE" ] && _after=$(wc -c < "$LEDGER_FILE" 2>/dev/null | tr -d ' ')
@@ -426,9 +441,11 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg sibling "$SIBLING" \
     --arg clean "$CLEAN" \
+    --arg newchain "$NEWCHAIN" \
     '{chain:$chain, n:$n, slug:$slug, session:$session, prev:$prev, wrapper:$wrapper, at:$at}
      + (if $sibling == "" then {} else {sibling: true} end)
-     + (if $clean == "" then {} else {clean: true} end)' 2>/dev/null)
+     + (if $clean == "" then {} else {clean: true} end)
+     + (if $newchain == "" then {} else {new_chain: true} end)' 2>/dev/null)
 fi
 
 if [ -n "$LEDGER_BLOCK" ]; then
@@ -664,11 +681,15 @@ if [ -n "$PAYLOAD" ] && [ "$PAYLOAD_MODE" = "idle" ]; then
   BANNER="↻ Handoff por inactividad — la sesión previa se cerró antes de perder la caché. Claude mostrará el brief y esperará tus instrucciones."
 elif [ -n "$PAYLOAD" ]; then
   PAYLOAD_BYTES=$(printf '%s' "$PAYLOAD" | wc -c | tr -d ' ')
-  BANNER="↻ Handoff recibido — sesión nueva sembrada con ${PAYLOAD_BYTES} bytes de la sesión previa. Cuando escribas, Claude abrirá confirmando el handoff."
-elif [ "$CLEAN" = "1" ]; then
+  # A `--new:` start says it broke the chain, or it reads like any other link.
+  NEW_NOTE=""
+  [ "$NEWCHAIN" = "1" ] && NEW_NOTE=" Empieza una cadena nueva${TITLE:+: $TITLE}."
+  BANNER="↻ Handoff recibido — sesión nueva sembrada con ${PAYLOAD_BYTES} bytes de la sesión previa.${NEW_NOTE} Cuando escribas, Claude abrirá confirmando el handoff."
+elif [ "$CLEAN" = "1" ] || [ "$NEWCHAIN" = "1" ]; then
   # The clean path is silent by design — no payload, nothing seeded. Saying so
   # is what keeps a deliberate new chain distinguishable from the mechanism
-  # having failed, which is the same silence (D3).
+  # having failed, which is the same silence (D3). A `--new:` that found
+  # nothing to seed is the same start.
   BANNER="↻ Sesión limpia — cadena nueva${TITLE:+: $TITLE}. No se sembró contexto."
 else
   BANNER=""

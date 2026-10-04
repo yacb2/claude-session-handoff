@@ -48,7 +48,9 @@
 # writes into it would drive the rate toward 100% by construction — the same
 # defect the NOTE separation exists to prevent, one layer up. Lines written
 # before this field existed have an empty $7 and read as `session`, which is
-# what they were.
+# what they were. A third value, `hook`, marks the one row a hook writes from
+# text the owner typed: the CHARTER of a `handoff --new:` chain. No session
+# wrote it, so the readout leaves it out of `wrote` like a retro row.
 #
 # Deltas are written by the model in the outgoing session (SKILL.md Step 2) in
 # a deliberately forgiving line syntax:
@@ -129,7 +131,7 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 ledger_apply() {
   _ledger="$1"; _delta="$2"; _n="$3"; _src="${4:-session}"
   case "$_src" in
-    session|retro) ;;
+    session|retro|hook) ;;
     *) _src="session" ;;
   esac
   [ -f "$_delta" ] || return 0
@@ -342,5 +344,5 @@ ledger_render() {
 case "${1:-}" in
   apply)  shift; ledger_apply  "${1:-}" "${2:-}" "${3:-1}" "${4:-session}" ;;
   render) shift; ledger_render "${1:-}" "${2:-1}" ;;
-  *) echo "usage: handoff-ledger.sh {apply <ledger> <delta> <n> [session|retro] | render <ledger> <n>}" >&2; exit 2 ;;
+  *) echo "usage: handoff-ledger.sh {apply <ledger> <delta> <n> [session|retro|hook] | render <ledger> <n>}" >&2; exit 2 ;;
 esac

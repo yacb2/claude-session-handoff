@@ -356,6 +356,7 @@ The `UserPromptSubmit` hook intercepts these before the model runs, so the turn 
 | `handoff: <text>` | that text, verbatim — the user's own brief |
 | `handoff <words>` | what bare `handoff` seeds, plus `<words>` as the user's instruction for the new session; the chain's curated brief is kept |
 | `handoff` | the last completed turn — the user's ask and the reply that answered it — read from the transcript by the hook, plus the chain's last curated brief and its file paths |
+| `handoff --new: <text>` | that text, verbatim, and the new session starts a NEW chain (own ledger, charter from the text's first line, ordinal 1) — for unrelated work that still needs the context |
 | `handoff --clean` | nothing; a genuinely empty session |
 
 Suggest `handoff: <text>` when the user already has the prompt drafted.

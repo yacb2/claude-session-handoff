@@ -528,6 +528,52 @@ else
   no "V: --clean marker wrong (exists=$TITLE_EXISTS slug=[$V_SLUG] out=[$TITLE_OUT])"
 fi
 
+# Case NC1 — `handoff --new: <text>` hands off like `handoff: <text>` (payload
+# verbatim, `--new:` stripped) but opens a NEW chain: the title file carries
+# new=1 and NO prev, and the slug comes from the text's own `slug:` line, never
+# from the old chain's record or a rename of the old session.
+SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
+run_hook "$(lineage_prompt 'handoff --new: slug: Inicio redesign
+first line of the brief' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
+SEED_CHAIN=""
+NC_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+NC_PAYLOAD='slug: Inicio redesign
+first line of the brief'
+if [ "$TRIGGERED" = 1 ] && [ "$PAYLOAD_OUT" = "$NC_PAYLOAD" ] \
+  && contains "$TITLE_OUT" "new=1" && ! contains "$TITLE_OUT" "prev=" \
+  && [ "$NC_SLUG" = "Inicio redesign" ]; then
+  ok "NC1: handoff --new: seeds the text verbatim and marks a new chain with no prev"
+else
+  no "NC1: --new: wrong (payload=[$PAYLOAD_OUT] title=[$TITLE_OUT])"
+fi
+
+# Case NC2 — with no `slug:` line the slug is the fallback (branch + time), not
+# the old chain's recorded slug and not the old session's hand-renamed title.
+SEED_CHAIN='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"1","at":"2026-08-19T10:00:00Z"}'
+run_hook "$(lineage_prompt 'handoff --new: move on to the redesign' 'SESS-A' "$TAILDIR/renamed.jsonl")" "$TEST_PID" "$PATH"
+SEED_CHAIN=""
+NC_SLUG=$(printf '%s\n' "$TITLE_OUT" | sed -n 's/^slug=//p')
+case "$NC_SLUG" in "feature/lineage "*) NC_SLUG_OK=1 ;; *) NC_SLUG_OK=0 ;; esac
+if [ "$PAYLOAD_OUT" = "move on to the redesign" ] && contains "$TITLE_OUT" "new=1" \
+  && [ "$NC_SLUG_OK" = 1 ]; then
+  ok "NC2: --new: without a slug line takes the fallback slug, not the old chain's"
+else
+  no "NC2: slug leaked from the old chain (payload=[$PAYLOAD_OUT] title=[$TITLE_OUT])"
+fi
+
+# Case NC3 — the mechanical NOTE says "no session wrote deltas for it": it
+# describes the OLD chain's link, and a new chain's ledger has no such link.
+NC3=$(mktemp -d)
+lineage_prompt 'handoff --new: x' 'SESS-A' "$TAILDIR/renamed.jsonl" \
+  | HOME="$NC3" CLAUDE_HANDOFF_ID="$TEST_PID" sh "$HOOK" >/dev/null 2>&1
+if [ -f "$NC3/.claude/tmp/handoff-flag-$TEST_PID" ] \
+  && [ ! -e "$NC3/.claude/tmp/handoff-ledger-mech-$TEST_PID" ]; then
+  ok "NC3: --new: writes no mechanical NOTE for the old chain"
+else
+  no "NC3: a mech note was written for a new chain"
+fi
+rm -rf "$NC3"
+
 # Case W — the slug is model-written text arriving from `handoff: <brief>`, and
 # the title file is line-based KEY=value. A brief that spells out a `prev=` line
 # of its own must not be able to add a field: the chain would then be handed a
@@ -722,6 +768,37 @@ if [ "$SS_TITLE" = "feature/lineage 14:05" ] \
   ok "Z: --clean opens a new chain at ordinal 1 with no ancestor"
 else
   no "Z: clean chain wrong (title=[$SS_TITLE] rec=[$SS_REC])"
+fi
+rm -rf "$SSBOX"
+
+# Case NC4 — the new=1 marker opens a NEW chain at ordinal 1 with no ancestor,
+# like --clean, but records new_chain (not clean) and still seeds the payload.
+ss_box "new=1
+slug=Inicio redesign" "the redesign brief" '{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}'
+ss_run "SESS-NEW" "$PATH"
+if [ "$SS_TITLE" = "Inicio redesign" ] \
+  && [ "$(ss_field .n)" = "1" ] && [ "$(ss_field .new_chain)" = "true" ] \
+  && [ -z "$(ss_field .prev)" ] && [ -z "$(ss_field .clean)" ] \
+  && [ "$(ss_field .chain)" = "SESS-NEW" ] && [ "$SS_LINES" = 2 ] \
+  && contains "$SS_OUT" "the redesign brief" \
+  && contains "$(printf '%s' "$SS_OUT" | jq -r '.systemMessage // empty' 2>/dev/null)" "cadena nueva"; then
+  ok "NC4: new=1 opens a new chain at ordinal 1, no prev, payload seeded, banner says so"
+else
+  no "NC4: new-chain start wrong (title=[$SS_TITLE] rec=[$SS_REC] msg=[$(printf '%s' "$SS_OUT" | jq -r '.systemMessage // empty' 2>/dev/null)])"
+fi
+rm -rf "$SSBOX"
+
+# Case NC5 — a `--new:` that seeds nothing still announces the new chain. With
+# no payload and no clean=1 the banner was empty: the same silence as the
+# mechanism failing, which the clean banner exists to prevent (D3).
+ss_box "new=1
+slug=fresh" "" ""
+ss_run "SESS-NEW-EMPTY" "$PATH"
+NC5_MSG=$(printf '%s' "$SS_OUT" | jq -r '.systemMessage // empty' 2>/dev/null)
+if contains "$NC5_MSG" "cadena nueva"; then
+  ok "NC5: an unseeded --new: start shows the new-chain banner"
+else
+  no "NC5: unseeded --new: start was silent (msg=[$NC5_MSG])"
 fi
 rm -rf "$SSBOX"
 

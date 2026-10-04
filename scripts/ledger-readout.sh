@@ -54,7 +54,7 @@ TOT_H=0; TOT_W=0; TOT_T=0; TOT_C=0; TOT_PRE=0; TOT_N=0; TOT_R=0
 # ledger_counts <ledger> <handoffs> -> "wrote retros turns notes" (all 0 when
 # absent). Rows past the last handoff are skipped: the last link is not in the
 # denominator, so counting its rows let wrote exceed handoffs.
-#   wrote : links with a session-written entry
+#   wrote : links with a session-written entry (not `retro`, not `hook`)
 #   retros: links whose ONLY entries are recovered — where both exist the
 #           session wrote, and the retro merely added
 #   notes : links whose ONLY event is a pointer; reported rather than merely
@@ -64,7 +64,7 @@ ledger_counts() {
   [ -f "$1" ] || { printf '0 0 0 0'; return; }
   awk -F'\t' -v h="$2" '
     $2+0 > h+0 { next }
-    $3!="NOTE" && $7!="retro" { w[$2]=1 }
+    $3!="NOTE" && $7!="retro" && $7!="hook" { w[$2]=1 }
     $3!="NOTE" && $7=="retro" { r[$2]=1 }
     $3=="NOTE" { n[$2]=1 }
     $3=="TURN" { t++ }

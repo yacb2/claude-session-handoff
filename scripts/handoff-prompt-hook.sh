@@ -5,6 +5,7 @@
 #
 #   handoff           → fresh session, no seeded context (with warning in wrapper)
 #   handoff: <text>   → fresh session, <text> injected as additionalContext
+#   handoff --new: <text> → the same, and the successor starts a NEW chain
 #   handoff <words>   → fresh session, transcript tail + <words> as the owner's instruction
 #
 # Requires: CLAUDE_HANDOFF_ID env var (set by the wrapper).
@@ -106,6 +107,20 @@ case "$FIRSTWORD" in
 esac
 # One leading-whitespace strip for every arm, rather than one per arm.
 PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
+
+# `handoff --new: <text>` hands off like `handoff: <text>` but the successor
+# starts a NEW chain (BL-038). It arrives in the no-colon arm as
+# PAYLOAD="--new: <text>", so it is peeled off here, once, and the text goes on
+# as a typed brief. With no text it stays a bare handoff that opens a new chain.
+NEW_CHAIN=""
+case "$PAYLOAD" in
+  --new:*)
+    NEW_CHAIN=1
+    REST=${PAYLOAD#--new:}
+    PAYLOAD=${REST#"${REST%%[![:space:]]*}"}
+    [ -n "$PAYLOAD" ] && NO_COLON=""
+    ;;
+esac
 
 # Verify the handoff wrapper is actually an ancestor of this process.
 #
@@ -332,7 +347,8 @@ ASK_MAX_BYTES=1024
 # Covered by hook-guard.sh Case I.
 #
 # Four payload shapes, in precedence order:
-#   handoff: <text>  -> the text, verbatim (a curated brief)
+#   handoff: <text>  -> the text, verbatim (a curated brief); `handoff --new:
+#                       <text>` is this shape with the successor on a new chain
 #   handoff --clean  -> no payload; the wrapper announces a clean start
 #   handoff <words>  -> the transcript tail, then <words> as the owner's
 #                       instruction; the words verbatim if no tail
@@ -425,11 +441,11 @@ fi
 #     "no model was involved" would be the thing hiding that no model has been
 #     involved for six links.
 #
-# `--clean` writes nothing: it starts a new chain by definition, so there is no
-# ledger for the line to land in.
+# `--clean` and `--new:` write nothing: they start a new chain by definition, so
+# there is no ledger for the line to land in.
 MECH_FILE="${HANDOFF_DIR}/handoff-ledger-mech-${CLAUDE_HANDOFF_ID}"
 rm -f "$MECH_FILE"
-if [ "$PAYLOAD" != "--clean" ]; then
+if [ "$PAYLOAD" != "--clean" ] && [ -z "$NEW_CHAIN" ]; then
   if [ -n "$PAYLOAD" ] && [ -z "$NO_COLON" ]; then
     MECH_HOW="the owner typed the brief himself (\`handoff: <text>\`)"
   elif [ -n "$PAYLOAD" ]; then
@@ -481,7 +497,8 @@ sanitize_slug() {
 }
 
 # The chain's current name, in precedence order:
-#   1. the brief's own `slug:` line — a brief re-describes the chain (D4)
+#   1. the brief's own `slug:` line — a brief re-describes the chain (D4);
+#      a `--new:` chain stops here and falls to 5, it inherits no old name
 #   2. a deliberate rename of this session — the picker is the manual override
 #   3. the record's slug for this session — the name the chain already has
 #   4. this session's title, stripped of any ordinal we put there
@@ -495,6 +512,7 @@ sanitize_slug() {
 chain_slug() {
   _s=$(printf '%s\n' "$PAYLOAD" | head -5 | sed -n 's/^[[:space:]]*[Ss]lug:[[:space:]]*//p' | head -1)
   [ -n "$_s" ] && { printf '%s' "$_s"; return 0; }
+  [ -n "$NEW_CHAIN" ] && { fallback_slug; return 0; }
 
   if [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ -n "$SESSION_ID" ]; then
     _s=$(jq -r --arg s "$SESSION_ID" 'select(.session == $s) | .slug // empty' \
@@ -572,6 +590,9 @@ if [ -n "$CHAIN_FILE" ] || [ -n "$SESSION_ID" ]; then
     # when the mechanism fails, and that is indistinguishable from the original
     # bug. A deliberate new chain says so (D3).
     printf 'clean=1\nslug=%s\n' "$(sanitize_slug "$(fallback_slug)")" > "$TITLE_FILE"
+  elif [ -n "$NEW_CHAIN" ]; then
+    # No prev: the successor is the first link of a chain of its own.
+    printf 'new=1\nslug=%s\n' "$(sanitize_slug "$(chain_slug)")" > "$TITLE_FILE"
   else
     printf 'prev=%s\nslug=%s\n' "$SESSION_ID" "$(sanitize_slug "$(chain_slug)")" > "$TITLE_FILE"
   fi

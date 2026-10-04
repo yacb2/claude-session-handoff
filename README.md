@@ -90,7 +90,17 @@ of the transcript and seeds that, labelled as a raw tail rather than a curated b
 for the session too expensive to prompt — a 600k-token conversation with a cold cache, where
 asking the model to draft a brief costs one request over the whole thing.
 
-### 5. `handoff --clean` (deliberately empty)
+### 5. `handoff --new: <text>` (seeded, new chain)
+
+```
+> handoff --new: slug: Inicio redesign
+> Redesign the landing page ...
+```
+
+Like `handoff: <text>`, but the new session starts a chain of its own: ordinal 1, no ancestor, a
+charter taken from the text's first line. The old chain's ledger is left untouched.
+
+### 6. `handoff --clean` (deliberately empty)
 
 ```
 > handoff --clean

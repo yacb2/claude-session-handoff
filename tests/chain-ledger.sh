@@ -1075,6 +1075,29 @@ else
 fi
 rm -rf "$WBOX"
 
+# A `handoff --new:` chain's CHARTER is written by the session-start hook from
+# the owner's typed text, not by a session, so it is `hook` and does not count.
+# Its own box: the TOTAL line sums every chain in the store.
+WBOX=$(mktemp -d)
+mkdir -p "$WBOX/.claude/handoff-chains"
+CH="$WBOX/.claude/handoff-chains/-w-proj.jsonl"
+for i in 1 2; do
+  printf '{"chain":"CN","n":%d,"slug":"w","session":"W%d","prev":"","wrapper":"1","at":"2026-08-23T00:0%d:00Z"}\n' \
+    "$i" "$i" "$i" >> "$CH"
+done
+L="$WBOX/.claude/handoff-chains/-w-proj.CN.ledger"
+printf '2026-08-23T00:00:00Z\t1\tCHARTER\t-\t-\tRedesign the landing page\thook\n' >> "$L"
+printf '2026-08-23T00:00:00Z\t1\tNOTE\t-\t-\tlink ended model-free\tsession\n' >> "$L"
+RO=$(HOME="$WBOX" sh "$READOUT" 2>/dev/null)
+if printf '%s' "$RO" | grep -q '0 wrote deltas' \
+  && printf '%s' "$RO" | grep -q '1 links model-free'; then
+  ok "W-NC: a hook-written CHARTER is not a session write and does not hide the bare link"
+else
+  no "W-NC: the hook CHARTER counted as a session write"
+  printf '%s\n' "$RO" | sed 's/^/     /'
+fi
+rm -rf "$WBOX"
+
 # --- Case W2: the `pre` cutoff does not move with a reinstall --------------
 #
 # The cutoff was the installed script's mtime, and `install.sh` copies without
@@ -1303,6 +1326,58 @@ else
   no "Z: render lost the tail of a 600-char row ($ZR of 2 whole)"
   printf '%s\n' "$ZOUT" | grep 'd[12] ' | cut -c1-120 | sed 's/^/     /'
 fi
+
+# --- Case NC: `handoff --new: <text>` opens a new chain with its own charter ---
+#
+# The successor starts a chain of its own: the first line of the typed text
+# becomes its CHARTER, and the old chain's ledger is not touched — no CLOSE, no
+# stray row, byte for byte. A delta file the old chain left behind belongs to the
+# old chain and is discarded, not applied to the new ledger.
+box
+link N1 'old chain' ''
+link N2 'old chain' 'OPEN OWED an old-chain decision.'
+OLD_LEDGER="$SANDBOX/.claude/handoff-chains/$KEY.N1.ledger"
+OLD_SUM=$(cksum < "$OLD_LEDGER")
+printf 'slug: new topic\n\nRedesign the landing page\nmore detail\n' \
+  > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+printf 'new=1\nslug=new topic\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+printf 'OPEN OWED must not reach the new ledger.\n' > "$SANDBOX/.claude/tmp/handoff-ledger-$CHID"
+printf '{"session_id":"N3","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$CWD" \
+  > "$SANDBOX/ss-in"
+HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" \
+  "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+NEW_LEDGER="$SANDBOX/.claude/handoff-chains/$KEY.N3.ledger"
+if [ -f "$NEW_LEDGER" ] && grep -q '	CHARTER	-	-	Redesign the landing page	' "$NEW_LEDGER" \
+  && [ "$(awk -F'\t' '$3=="CHARTER" {print $7}' "$NEW_LEDGER")" = "hook" ] \
+  && ! grep -q 'must not reach' "$NEW_LEDGER" \
+  && [ "$(cksum < "$OLD_LEDGER")" = "$OLD_SUM" ]; then
+  ok "NC: --new: lands a CHARTER from the text's first line and leaves the old ledger byte-identical"
+else
+  no "NC: new-chain ledger wrong or the old ledger changed"
+  cat "$NEW_LEDGER" 2>/dev/null | sed 's/^/     /'
+fi
+rm -rf "$SANDBOX"
+
+# A bare `handoff --new:` seeds the raw transcript tail, which is no charter:
+# its header line must not become the new chain's CHARTER. The record is the
+# control: it proves the start ran and opened the new chain.
+box
+printf '[RAW TRANSCRIPT TAIL — NOT a curated handoff brief]\nsome reply\n' \
+  > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+printf 'new=1\nslug=new topic\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+printf '{"session_id":"T1","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$CWD" \
+  > "$SANDBOX/ss-in"
+HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" \
+  "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+T_LEDGER="$SANDBOX/.claude/handoff-chains/$KEY.T1.ledger"
+if grep -q '"new_chain":true' "$SANDBOX/.claude/handoff-chains/$KEY.jsonl" 2>/dev/null \
+  && ! grep -q '	CHARTER	' "$T_LEDGER" 2>/dev/null; then
+  ok "NC-tail: a raw-tail --new: payload opens the chain with no CHARTER"
+else
+  no "NC-tail: the raw tail header became a CHARTER, or the new chain was not recorded"
+  cat "$T_LEDGER" 2>/dev/null | sed 's/^/     /'
+fi
+rm -rf "$SANDBOX"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
