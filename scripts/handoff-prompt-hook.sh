@@ -17,6 +17,15 @@
 INPUT=""
 [ -t 0 ] || INPUT=$(cat)
 
+# Raw prefilter, before any fork: ~100% of prompts are not handoffs, and the raw
+# JSON contains the prompt text, so a prompt that starts with "handoff" always
+# passes. A false positive (say a transcript_path containing "handoff") only
+# falls through to the real gate below. Covered by hook-guard.sh Cases E2-E4.
+case "$INPUT" in
+  *[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*) ;;
+  *) exit 0 ;;
+esac
+
 # `printf '%s'`, never `echo`: /bin/sh on macOS (bash with xpg_echo) and dash
 # both interpret backslash escapes in echo, so the JSON's \n became a real
 # newline INSIDE a JSON string and jq rejected the whole object. stderr is
@@ -25,10 +34,6 @@ INPUT=""
 TRANSCRIPT=""
 if command -v jq >/dev/null 2>&1; then
   PROMPT=$(printf '%s' "$INPUT" | jq -r '.prompt // empty')
-  # Probed on 2.1.224, not read off the docs: UserPromptSubmit stdin carries
-  # cwd, hook_event_name, permission_mode, prompt, prompt_id, session_id and
-  # transcript_path. See .context/proofs/handoff-ask-when-present/.
-  TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')
 else
   # The fallback must decode JSON, not merely find it. A `[^"]*` match ends at
   # the first ESCAPED quote, so `handoff: fix the \"parser\" bug` arrived as
@@ -68,6 +73,15 @@ case "${FIRSTWORD%%:*}" in
     exit 0
     ;;
 esac
+
+# Only a real handoff needs the transcript path, so its jq fork waits for the gate.
+# Probed on 2.1.224, not read off the docs: UserPromptSubmit stdin carries
+# cwd, hook_event_name, permission_mode, prompt, prompt_id, session_id and
+# transcript_path. See .context/proofs/handoff-ask-when-present/.
+# The no-jq fallback never read it, so TRANSCRIPT stays empty there.
+if command -v jq >/dev/null 2>&1; then
+  TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')
+fi
 
 # Detect payload — anything after "handoff" or "handoff:".
 # Branch on FIRSTWORD, which is already computed: the gate above has already

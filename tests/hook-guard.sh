@@ -144,6 +144,40 @@ else
   no "E: non-handoff prompt is inert (rc=$RC out=$OUT trig=$TRIGGERED)"
 fi
 
+# Case E2 — the hot path forks no jq. ~100% of prompts are not handoffs, and a
+# raw prefilter on the JSON must reject them before any jq runs. A shim jq on
+# PATH records each call; the real jq behind it keeps the positive controls honest.
+JQSHIM=$(mktemp -d)
+REALJQ=$(command -v jq)
+printf '#!/bin/sh\necho x >> "%s/calls"\nexec "%s" "$@"\n' "$JQSHIM" "$REALJQ" > "$JQSHIM/jq"
+chmod +x "$JQSHIM/jq"
+trap 'rm -rf "$NOJQ" "$JQSHIM"' EXIT
+jq_calls() { if [ -f "$JQSHIM/calls" ]; then wc -l < "$JQSHIM/calls" | tr -d ' '; else echo 0; fi; }
+
+run_hook '{"prompt":"hello there","transcript_path":"/tmp/x.jsonl"}' "$TEST_PID" "$JQSHIM:$PATH"
+if [ "$TRIGGERED" = 0 ] && [ -z "$OUT" ] && [ "$(jq_calls)" = 0 ]; then
+  ok "E2: non-handoff prompt forks no jq"
+else
+  no "E2: non-handoff prompt forks no jq (trig=$TRIGGERED out=$OUT jq_calls=$(jq_calls))"
+fi
+
+# A transcript_path containing "handoff" passes the raw prefilter but must still
+# fall through to the real gate and stay silent.
+run_hook '{"prompt":"hello there","transcript_path":"/home/u/.claude/projects/claude-session-handoff/s.jsonl"}' "$TEST_PID" "$JQSHIM:$PATH"
+if [ "$TRIGGERED" = 0 ] && [ "$RC" = 0 ] && [ -z "$OUT" ]; then
+  ok "E3: 'handoff' only in transcript_path stays inert"
+else
+  no "E3: 'handoff' only in transcript_path stays inert (rc=$RC out=$OUT trig=$TRIGGERED)"
+fi
+
+# The prefilter must stay case-insensitive like the gate it guards.
+run_hook '{"prompt":"HaNdOfF: x"}' "$TEST_PID" "$JQSHIM:$PATH"
+if [ "$TRIGGERED" = 1 ]; then
+  ok "E4: mixed-case HaNdOfF still fires past the prefilter"
+else
+  no "E4: mixed-case HaNdOfF still fires past the prefilter (rc=$RC out=$OUT trig=$TRIGGERED)"
+fi
+
 # Case H — a MULTI-LINE prompt must reach the payload intact.
 # Two defects met here, and the first masked the second:
 #   `echo "$INPUT"` interprets the JSON's \n under both /bin/sh (bash with
@@ -209,7 +243,7 @@ fi
 # instead of the lead-in. A fixture with a single assistant line would pass under
 # a naive "last text block" filter too, and prove nothing.
 TAILDIR=$(mktemp -d)
-trap 'rm -rf "$NOJQ" "$TAILDIR"' EXIT
+trap 'rm -rf "$NOJQ" "$JQSHIM" "$TAILDIR"' EXIT
 FIXTURE="$TAILDIR/transcript.jsonl"
 cat > "$FIXTURE" <<'FIXEOF'
 {"type":"user","message":{"content":"fix the parser"}}
