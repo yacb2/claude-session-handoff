@@ -157,6 +157,18 @@ if [ "$ALLOW_STALE" = 0 ] && [ -f "$REPO_SKILL" ] && [ -f "$INSTALLED_SKILL" ] \
   exit 1
 fi
 
+# The hooks are measured too: a stale installed hook scores old behaviour.
+if [ "$ALLOW_STALE" = 0 ] && [ -z "${INSTALLED_SKILL_OVERRIDE:-}" ]; then
+  for _h in handoff-session-start.sh handoff-prompt-hook.sh handoff-ledger.sh handoff-idle-cache.sh; do
+    if [ -f "$REPO/scripts/$_h" ] && [ -f "$HOME/.claude/scripts/$_h" ] \
+       && ! cmp -s "$HOME/.claude/scripts/$_h" "$REPO/scripts/$_h"; then
+      echo "the installed $_h differs from this repo's — run ./install.sh first." >&2
+      echo "Pass --allow-stale if the difference is deliberate." >&2
+      exit 1
+    fi
+  done
+fi
+
 mkdir -p "$TMP_DIR"
 
 RESUME_ARGS=""

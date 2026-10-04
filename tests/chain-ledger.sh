@@ -609,6 +609,19 @@ else
   printf '%s\n' "$_retro" | sed 's/^/     /' | head -40
 fi
 
+# --- Case R1c: the retro names a subagent_type, never leaves it unset -------
+#
+# Under a settings deny on the default agent types an unset subagent_type is
+# refused outright, and the retro silently never runs. The text must tell the
+# model to pass an explicit read-only/lookup type, and must not hand it the
+# bare "Launch ONE subagent" with the type left to default.
+if printf '%s' "$_retro" | grep -q 'subagent_type' \
+  && ! printf '%s' "$_retro" | grep -qi 'leave[^.]*unset'; then
+  ok "R1c: the retro block tells the model to pass an explicit subagent_type"
+else
+  no "R1c: the retro block never names subagent_type"
+fi
+
 # --- Case R2: a model already wrote the deltas -----------------------------
 retro_box
 link S1 'chain s' ''

@@ -47,7 +47,7 @@ This case is narrow by design and does not weaken the one above it: it requires 
 
 **Standing authorization recorded in the project — execute, do not re-ask.** When the project's own CLAUDE.md or memory, or a user-level rule in `~/.claude/rules/` (which covers every project), carries a durable grant — e.g. *"handoff at context threshold without asking"* — the proactive and soft-signal cases escalate to execute: the confirmation was given once, durably, and asking again is exactly the friction the grant exists to remove. The grant's scope is this one move — opening the successor session with the seeded brief. It never extends to publishing, deploying, or anything else the session might also want to do.
 
-The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it, and the user ends up re-dictating it in every project while sessions still close with "¿lanzo el handoff?".
+The grant has to live somewhere durable to exist at all. When the user grants it **in-session** — *"haz handoff cada vez que necesites, no me lo tienes que consultar"* — honor it for the session **and, unless a user-level rule in `~/.claude/rules/` already grants it, offer once to record it** in the project's CLAUDE.md (one line, theirs to delete). A grant that lives only in the conversation dies with it, and the user ends up re-dictating it in every project while sessions still close with "¿lanzo el handoff?".
 
 **Idle cache expiry — execute under a standing grant, otherwise one line.** A system reminder tagged `[handoff-idle]` means `handoff-idle-cache.sh` woke this session: it has sat idle ~54 minutes at depth, and its prompt cache expires at 60, after which the owner's next message re-writes the whole context. Nobody is at the keyboard, so never ask. Hand off only when a standing authorization (the case above) covers this session **and** the handoff is safe: no subagent running (its hand-back would reach a dead session), no question to the owner still unanswered, and your own uncommitted work named path by path in the brief. Put `mode: idle` as the brief's second line, under `slug:`: the successor then shows the brief and waits instead of acting on the wrapper's automatic `continue`. Any condition missing: end the turn with one line and nothing else — the hook wakes a session once per idle period, so doing nothing costs one cache read.
 
@@ -75,7 +75,7 @@ When the user just needs to "keep working in a clean session", handoff wins on c
 
 ### Step 1 — draft the handoff prompt
 
-Use this minimal structure. **Every sentence must be information the next session cannot derive from reading the code or `CLAUDE.md`.**
+Use this minimal structure. **Every sentence must be information the next session cannot derive from reading the code, any `CLAUDE.md` or `~/.claude/rules/`; do not restate a rule they already carry unless this session saw it broken.**
 
 ```
 slug: <what this chain of sessions is called>
@@ -166,7 +166,9 @@ Two things about it are worth knowing before you follow it:
 
 - **Delegate it.** The digest is built by `handoff-retro-filter.py` — mechanical, no model,
   under a second even on a very large transcript. Then **one subagent on a small model**
-  reads that digest. The whole saving is that you never read the transcript yourself.
+  reads that digest, launched with an explicit read-only or lookup `subagent_type`, never
+  unset and never `general-purpose` (a settings deny on the default types refuses an unset one).
+  The whole saving is that you never read the transcript yourself.
 - **Hand it what is already open.** The digest has the ledger block cut out, so the agent
   cannot know which items the chain already carries and will re-open them in its own words.
   The retro block pastes the open items into step 2 for that reason; an `OWED` is a decision

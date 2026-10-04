@@ -426,7 +426,7 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ -f "$CHAIN_FILE" ] && [ "${C
     _tlines=$(printf '%s\n    link %-3s %s' "$_tlines" "$_ln" "$_lt")
   done
   IFS=$_oldifs
-  CHAIN_BLOCK=$(printf '=== CHAIN CONTEXT — this session is link %s of chain %s ===\nEverything above was rendered from files that stay on disk. Read them only when the brief leaves a gap you would otherwise ask the owner to fill.\n  chain record : %s\n                 one JSON line per link (n, slug, session, prev, at)\n  ledger       : %s\n                 every OPEN / CLOSE / TURN event; the block above is its rendering\n  last brief   : %s\n  predecessor transcripts, newest first:%s\nTranscripts are large and stored 0600. Do not read one raw: build a digest first —\n  (umask 077; python3 %s <transcript> > ~/.claude/tmp/handoff-digest-<link>)\n— and read that, or hand it to a subagent on a small model.\n=== END CHAIN CONTEXT ===' \
+  CHAIN_BLOCK=$(printf '=== CHAIN CONTEXT — this session is link %s of chain %s ===\nEverything above was rendered from files that stay on disk. Read them only when the brief leaves a gap you would otherwise ask the owner to fill.\n  chain record : %s\n                 one JSON line per link (n, slug, session, prev, at)\n  ledger       : %s\n                 every OPEN / CLOSE / TURN event; the block above is its rendering\n  last brief   : %s\n  predecessor transcripts, newest first:%s\nTranscripts are large and stored 0600. Do not read one raw: build a digest first —\n  (umask 077; python3 %s <transcript> > ~/.claude/tmp/handoff-digest-<link>)\n— and read that, or hand it to a subagent on a small model (explicit read-only or lookup subagent_type).\n=== END CHAIN CONTEXT ===' \
     "${N:-1}" "$CHAIN" "$CHAIN_FILE" \
     "$( [ -n "$LEDGER_FILE" ] && [ -f "$LEDGER_FILE" ] && printf '%s' "$LEDGER_FILE" || printf '(none yet)')" \
     "$( [ -n "$BRIEF_FILE" ] && [ -f "$BRIEF_FILE" ] && printf '%s' "$BRIEF_FILE" || printf '(none yet)')" \
@@ -516,8 +516,10 @@ if [ "$MODEL_DELTA" = "0" ] && [ -n "${LEDGER_FILE:-}" ] && [ -r "${LEDGER_SH:-}
 '   your shell would otherwise write it 0644 — more readable than its source.' \
 "    (umask 077; python3 $Q_FILTER $Q_TRANSCRIPT > $Q_DIGEST)" \
 '' \
-'2) Launch ONE subagent on a small model (Sonnet) over that digest — not' \
-'   yourself; the whole saving is that you never read the transcript. Ask it' \
+'2) Launch ONE subagent on a small model over that digest — not yourself;' \
+'   the whole saving is that you never read the transcript. Pass an explicit' \
+'   read-only or lookup subagent_type (never unset, never general-purpose:' \
+'   an unset type can be denied by the user'"'"'s settings). Ask it' \
 '   for delta lines and nothing else, one per line, in exactly this syntax:' \
 '     TURN <a course correction that link took>' \
 '     OPEN OWED <a decision only the owner can make, still unanswered>' \
