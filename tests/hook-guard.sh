@@ -1437,46 +1437,21 @@ else
   fi
 fi
 
-# Case M — /handoff's allowed-tools must cover every command its own block runs.
+# Case M — /handoff is a thin pointer to the session-handoff skill (BL-047 / D7).
 #
-# A permission prompt on the one command whose entire value is running
-# unattended. The block used `[ ... ]` and `echo`, neither of which the
-# frontmatter declared — and `Bash(test:*)` does not cover the `[` spelling,
-# they are different command words to the matcher.
-#
-# Rather than bet on how the matcher splits a multi-line script, the block is
-# written to use only forms the frontmatter declares by name. This check is the
-# mechanical half: it fails if the block reaches for an undeclared word again.
+# It used to carry its own copy of the fire block, which drifted from the skill's
+# (different allowed-tools, different rules). The command now only loads the
+# skill; a fire block or a direct handoff-fire.sh call creeping back in would
+# resurrect the second copy, and one without the skill name would do nothing.
 CMD_MD="$REPO/commands/handoff.md"
-ALLOWED=$(awk '/^allowed-tools:/ { sub(/^allowed-tools:[[:space:]]*/, ""); print; exit }' "$CMD_MD")
-CMD_BLOCK=$(awk '
-  /^```sh$/ { inblock = 1; next }
-  inblock && /^```$/ { exit }
-  inblock   { print }
-' "$CMD_MD")
-
-# `(` and a backtick open a command word too: `ps` lives inside a $( ... )
-# substitution, and a class of only [;&| ] silently skips it — the check then
-# reports on the words that happen to be pipeline-adjacent and no others.
-M_MISSING=""
-for W in sh; do
-  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|(\`[:space:]])$W([[:space:]]|$)" || continue
-  case "$ALLOWED" in
-    *"Bash($W:"*) ;;
-    *) M_MISSING="$M_MISSING $W" ;;
-  esac
-done
-# `[` and `echo` are the two the block must not use: `[` because Bash(test:*)
-# does not match it, `echo` because only printf is declared.
-for W in '\[' 'echo'; do
-  printf '%s\n' "$CMD_BLOCK" | grep -qE "(^|[;&|[:space:]])$W([[:space:]]|$)" \
-    && M_MISSING="$M_MISSING undeclarable:$W"
-done
-
-if [ -z "$M_MISSING" ]; then
-  ok "M: every command in /handoff's block is declared in allowed-tools"
+M_BAD=""
+grep -q 'session-handoff' "$CMD_MD" || M_BAD="$M_BAD no-skill-name"
+grep -q 'handoff-fire' "$CMD_MD" && M_BAD="$M_BAD fire-script-call"
+grep -q '^```sh' "$CMD_MD" && M_BAD="$M_BAD fire-block"
+if [ -z "$M_BAD" ]; then
+  ok "M: /handoff names the session-handoff skill and carries no fire block"
 else
-  no "M: /handoff would prompt for permission on:$M_MISSING"
+  no "M: /handoff is not a thin pointer:$M_BAD"
 fi
 
 # Cases N/O — BL-024: the runnable blocks must check for a WATCHING wrapper,
@@ -1511,10 +1486,9 @@ run_block() {
   rm -rf "$B_HOME"
 }
 
-for WHICH in skill cmd; do
+for WHICH in skill; do
   case "$WHICH" in
     skill) BLOCK=$SKILL_BLOCK; WHO="the skill's block" ;;
-    cmd)   BLOCK=$CMD_BLOCK;   WHO="/handoff's block" ;;
   esac
 
   # 999999 is above the default PID ceiling, so it is neither alive nor an

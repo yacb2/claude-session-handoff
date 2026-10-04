@@ -62,7 +62,7 @@ The same hook serves two more forms with no text at all — **4** and **5** belo
 > /handoff
 ```
 
-With no args, Claude generates the handoff prompt from the conversation context. With args, it uses them as-is.
+It loads the `session-handoff` skill and runs it as a direct trigger. With no args, Claude generates the handoff prompt from the conversation context. With args, it uses them as-is.
 
 **Spends tokens for the current turn** because the model writes the prompt — but infinitely less than `/compact`.
 
@@ -224,10 +224,10 @@ variants each need a different sequence per emulator.
 | `scripts/handoff-ledger.sh` | The chain ledger: `apply` records a link's deltas, `render` prints the block the SessionStart hook injects. Append-only, one file per chain, no model involved — which is what lets it reach the model-free `handoff` paths too. |
 | `scripts/handoff-retro-filter.py` | Reduces a transcript to the prose a retro can read (measured 2.8 MB → 56 KB; 260 MB → 199 KB in 0.4s). Mechanical, no model. Feeds the `PREDECESSOR RETRO` block the SessionStart hook injects when the previous link ended without any model writing deltas. |
 | `scripts/ledger-readout.sh` | Read-only report over the recorded chains: how often a live session writes deltas, how many links a retro recovered, and how many ended model-free. `--owed [project]` lists the open OWED items of chains idle 7+ days instead. **Repo-only — not installed**; run it from a checkout. |
-| `commands/handoff.md` | `/handoff` slash command — model-driven path that drafts the prompt and runs the handoff. |
+| `commands/handoff.md` | `/handoff` slash command — a thin pointer that loads the `session-handoff` skill. |
 | `skills/session-handoff/SKILL.md` | Skill with natural-language triggers and a structured prompt template; works across the languages Claude generalizes. |
 | `install.sh` | Installer with shell detection, idempotency, version comparison, and `--uninstall` support. |
-| `tests/smoke.sh` | Installer protocol + hook output validation (11 cases, 45 asserts). Requires `claude-restart` as a sibling repo. |
+| `tests/smoke.sh` | Installer protocol + hook output validation. Requires `claude-restart` as a sibling repo. |
 | `tests/wrapper-dispatch.sh` | Drives the wrapper's dispatch loop against a stub `claude` and asserts what it relaunches with. |
 | `tests/hook-guard.sh` | Regression tests for the UserPromptSubmit hook's guards, plus a check that no eval query can satisfy the eval by firing the hook instead of the skill. |
 | `tests/skill-consistency.sh` | Asserts the skill's `when_to_use` front-matter and its body enumerate the same trigger cases. |
