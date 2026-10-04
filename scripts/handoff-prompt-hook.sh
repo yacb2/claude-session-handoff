@@ -366,6 +366,7 @@ ASK_MAX_BYTES=1024
 # mode comes from the umask above and not from a leftover 0644 file, and the two
 # that do not, because an orphaned payload would otherwise be seeded (Case I).
 rm -f "$PAYLOAD_FILE"
+TAIL_WRITTEN=""
 
 if [ "$PAYLOAD" = "--clean" ]; then
   : # already unlinked
@@ -401,6 +402,7 @@ $ASK
 OWNER INSTRUCTION FOR THIS SESSION: $PAYLOAD"
   fi
   printf '%s\n%s%s\n%s\n' "$TAIL_HEADER" "$ASK" "$REPLY_HEADER" "$TAIL" > "$PAYLOAD_FILE" || WRITE_FAILED=1
+  TAIL_WRITTEN=1
 elif [ -n "$PAYLOAD" ]; then
   # `handoff <words>` with no tail to carry them: the words are all there is.
   printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE" || WRITE_FAILED=1
@@ -410,6 +412,81 @@ else
   # failing the handoff — a clean session is a worse outcome than a seeded one,
   # not a broken one.
   rm -f "$PAYLOAD_FILE"
+fi
+
+# --- BL-037: the dirty paths this session appears to own ---------------------
+#
+# A bare handoff carries only the closing reply, so the successor cannot tell its
+# own uncommitted work from a peer's. Measured 2026-10-04: 16 of 105 bare links
+# stranded a median of 3 own paths. This lists the dirty paths (git status) that
+# some non-read tool call of this session NAMES, the main transcript and its
+# subagents/*.jsonl alike (about half of all writes are a subagent's, often a
+# Bash heredoc, which a Write/Edit-only scan misses). A mention is a heuristic,
+# hence "candidates". Only on the tail arm and only when the payload exists, so
+# Case I (no orphan payload) holds; silent when jq/git/repo is missing.
+# Relative writes after a `cd` are not resolved (an accepted gap).
+OWN_COUNT=0
+_own_cwd=""
+[ -n "$TAIL_WRITTEN" ] && [ -f "$PAYLOAD_FILE" ] && [ -f "$TRANSCRIPT" ] \
+  && command -v jq >/dev/null 2>&1 && command -v git >/dev/null 2>&1 \
+  && _own_cwd=$(printf '%s' "$INPUT" | jq -r '.cwd // empty')
+if [ -n "$_own_cwd" ]; then
+  _own_in="${PAYLOAD_FILE}.tools.$$"
+  # Allow-list, not deny-list: only the tools that write a file, and only the
+  # field that names it (never old_string/new_string/content, which merely quote
+  # paths), plus a Bash command. One jq per file, so a corrupt subagent file
+  # loses only itself.
+  : > "$_own_in"
+  for _f in "$TRANSCRIPT" "${TRANSCRIPT%.jsonl}"/subagents/*.jsonl; do
+    [ -f "$_f" ] || continue
+    jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use")
+      | if (.name | IN("Write","Edit","MultiEdit","NotebookEdit")) then (.input.file_path // .input.notebook_path // empty)
+        elif .name == "Bash" then (.input.command // empty) else empty end' "$_f" >> "$_own_in" 2>/dev/null
+  done
+  _own_list=""
+  _own_total=0
+  if [ -s "$_own_in" ]; then
+    # Porcelain v1 is repo-root relative; a rename entry ("a -> b") never
+    # matches and is skipped. -uall lists files inside an untracked directory
+    # (a bare "dir/" entry would never match), --no-optional-locks keeps a
+    # read-only status from taking the index lock under a running peer.
+    # A path with a space is never matched (words are split on it).
+    _own_dirty=$(git --no-optional-locks -C "$_own_cwd" status --porcelain -uall 2>/dev/null | cut -c4- | grep -v '^$')
+    if [ -n "$_own_dirty" ]; then
+      # Repo toplevel, physical and as the cwd spells it: an absolute word only
+      # counts as <toplevel>/<path>, so /elsewhere/scripts/x.sh does not claim
+      # this repo's scripts/x.sh. Relative words match by suffix.
+      _own_up=$(git -C "$_own_cwd" rev-parse --show-cdup 2>/dev/null)
+      _own_top_l=$(cd "$_own_cwd/$_own_up" 2>/dev/null && pwd)
+      _own_top_p=$(cd "$_own_cwd/$_own_up" 2>/dev/null && pwd -P)
+      printf '%s\n' "$_own_dirty" > "${_own_in}.dirty"
+      # One awk pass, not a grep per path (BSD grep -f over ~100 patterns costs
+      # ~700 ms on a 1 MB dump). Porcelain order.
+      _own_all=$(tr -c 'A-Za-z0-9_./@+~-' '\n' < "$_own_in" | awk -v df="${_own_in}.dirty" -v tl="$_own_top_l/" -v tp="$_own_top_p/" '
+        BEGIN { while ((getline l < df) > 0) { d[l] = 1; ord[++n] = l } }
+        { w = $0
+          if (substr(w, 1, 1) == "/") {
+            if (substr(w, 1, length(tl)) == tl) { r = substr(w, length(tl) + 1); if (r in d) hit[r] = 1 }
+            if (substr(w, 1, length(tp)) == tp) { r = substr(w, length(tp) + 1); if (r in d) hit[r] = 1 }
+            next }
+          while (w != "") { if (w in d) hit[w] = 1; i = index(w, "/"); if (!i) break; w = substr(w, i + 1) } }
+        END { for (k = 1; k <= n; k++) if (ord[k] in hit) print ord[k] }')
+      rm -f "${_own_in}.dirty"
+      if [ -n "$_own_all" ]; then
+        _own_total=$(printf '%s\n' "$_own_all" | wc -l | tr -d ' ')
+        _own_list=$(printf '%s\n' "$_own_all" | head -n 50)
+      fi
+    fi
+  fi
+  rm -f "$_own_in"
+  if [ -n "$_own_list" ]; then
+    OWN_COUNT=$_own_total
+    {
+      printf '\n--- uncommitted paths this session appears to have touched (candidates; verify before treating as yours) ---\n'
+      printf '%s\n' "$_own_list" | sed 's/^/- /'
+      [ "$_own_total" -gt 50 ] && printf '(%s more not shown)\n' "$((_own_total - 50))"
+    } >> "$PAYLOAD_FILE"
+  fi
 fi
 
 # --- the mechanical ledger line ----------------------------------------------
@@ -457,6 +534,9 @@ if [ "$PAYLOAD" != "--clean" ] && [ -z "$NEW_CHAIN" ]; then
     MECH_WHERE="; its transcript: $TRANSCRIPT"
   else
     MECH_WHERE=""
+  fi
+  if [ "$OWN_COUNT" -gt 0 ]; then
+    MECH_WHERE="$MECH_WHERE; $OWN_COUNT uncommitted candidate path(s) listed in the payload"
   fi
   printf 'NOTE link ended model-free — %s, so no session wrote deltas for it%s\n' \
     "$MECH_HOW" "$MECH_WHERE" > "$MECH_FILE"

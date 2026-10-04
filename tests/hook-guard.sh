@@ -85,6 +85,7 @@ run_hook() {
     PAYLOAD_EXISTS=0
     PAYLOAD_OUT=""
   fi
+  MECH_OUT=$(cat "$SANDBOX/.claude/tmp/handoff-ledger-mech-$2" 2>/dev/null)
   TFILE="$SANDBOX/.claude/tmp/handoff-title-$2"
   if [ -f "$TFILE" ]; then
     TITLE_EXISTS=1
@@ -1552,6 +1553,112 @@ else
   no "AM: ordinary opening changed"
 fi
 rm -rf "$SSBOX"
+
+# Cases BL037 — a bare handoff lists the dirty paths this session's own tool
+# calls name (main transcript AND subagents/*.jsonl), as candidates. Layer: hook
+# integration, the only place the transcript, git and payload meet.
+OWNDIR=$(mktemp -d)
+trap 'rm -rf "$NOJQ" "$JQSHIM" "$TAILDIR" "$OWNDIR"' EXIT
+OWNREPO="$OWNDIR/repo"
+mkdir -p "$OWNREPO" && git -C "$OWNREPO" init -q 2>/dev/null
+printf 'x' > "$OWNREPO/mine_sub.txt"; printf 'x' > "$OWNREPO/mine_main.txt"; printf 'x' > "$OWNREPO/peer_file.txt"
+OWNT="$OWNDIR/t.jsonl"
+mkdir -p "$OWNDIR/t/subagents"
+cat > "$OWNT" <<EOF2
+{"type":"user","message":{"content":"go"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"$OWNREPO/mine_main.txt","content":"x"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"$OWNREPO/peer_file.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"..."}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"OWN_REPLY"}]}}
+EOF2
+cat > "$OWNDIR/t/subagents/agent-1.jsonl" <<EOF2
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cat > $OWNREPO/mine_sub.txt <<'EOT'\nx\nEOT"}}]}}
+EOF2
+own_prompt() { printf '%s' "$1" | jq -Rs --arg t "$2" --arg c "$OWNREPO" '{prompt:., transcript_path:$t, cwd:$c}'; }
+run_hook "$(own_prompt handoff "$OWNT")" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "OWN_REPLY" && contains "$PAYLOAD_OUT" "- mine_sub.txt" \
+  && contains "$PAYLOAD_OUT" "- mine_main.txt" && contains "$PAYLOAD_OUT" "candidates; verify" \
+  && ! contains "$PAYLOAD_OUT" "peer_file.txt" \
+  && contains "$MECH_OUT" "2 uncommitted candidate path(s)"; then
+  ok "BL037: bare handoff lists subagent-heredoc and main writes, not a Read-only or foreign dirty file; the MECH note carries the count"
+else
+  no "BL037: candidate section wrong (out=[$PAYLOAD_OUT])"
+fi
+run_hook "$(own_prompt "handoff: a brief" "$OWNT")" "$TEST_PID" "$PATH"
+if [ "$PAYLOAD_OUT" = "a brief" ]; then ok "BL037: handoff: <text> gets no section"; else no "BL037: section on handoff: (out=[$PAYLOAD_OUT])"; fi
+run_hook "$(own_prompt "handoff --clean" "$OWNT")" "$TEST_PID" "$PATH"
+if [ "$PAYLOAD_EXISTS" = 0 ]; then ok "BL037: --clean gets no payload"; else no "BL037: --clean wrote payload"; fi
+NOREPLY="$OWNDIR/n.jsonl"
+printf '%s\n' '{"type":"user","message":{"content":"go"}}' "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Write\",\"input\":{\"file_path\":\"$OWNREPO/mine_main.txt\"}}]}}" > "$NOREPLY"
+SEED_PAYLOAD='stale brief from an earlier handoff'
+run_hook "$(own_prompt handoff "$NOREPLY")" "$TEST_PID" "$PATH"
+SEED_PAYLOAD=""
+if [ "$PAYLOAD_EXISTS" = 0 ]; then ok "BL037: a no-reply transcript still leaves no payload file"; else no "BL037: orphan payload (out=[$PAYLOAD_OUT])"; fi
+
+# BL037 round 2 — what counts as a mention, and what git reports.
+# tl <transcript> <tool> <input-json>: append one assistant tool_use line.
+tl() { jq -nc --arg n "$2" --argjson i "$3" '{type:"assistant",message:{content:[{type:"tool_use",name:$n,input:$i}]}}' >> "$1"; }
+own_t() { # <path> : a transcript header and a closing reply
+  printf '%s\n' '{"type":"user","message":{"content":"go"}}' > "$1"
+}
+own_end() { printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"OWN_REPLY"}]}}' >> "$1"; }
+R2="$OWNDIR/repo2"; mkdir -p "$R2/scripts" "$R2/newdir" "$R2/other"
+git -C "$R2" init -q 2>/dev/null
+for f in scripts/x.sh newdir/note.md newdir/sibling.md other/o.txt other/e.txt other/n.txt other/t.txt; do printf x > "$R2/$f"; done
+
+# F1a: an untracked directory is expanded, and a Write inside it is listed.
+T=$OWNDIR/a.jsonl; own_t "$T"; tl "$T" Write "{\"file_path\":\"$R2/newdir/note.md\",\"content\":\"x\"}"; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- newdir/note.md" && ! contains "$PAYLOAD_OUT" "sibling.md"; then
+  ok "BL037: a file written inside an untracked directory is listed (and its untouched sibling is not)"
+else no "BL037: untracked dir (out=[$PAYLOAD_OUT])"; fi
+
+# F1b + truncation: 600 untracked files, the written one sorts after position 500.
+R3="$OWNDIR/repo3"; mkdir -p "$R3"; git -C "$R3" init -q 2>/dev/null
+i=0; ALLNAMES=""
+while [ $i -lt 600 ]; do i=$((i+1)); n=$(printf 'f%03d.txt' $i); printf x > "$R3/$n"; ALLNAMES="$ALLNAMES $n"; done
+T=$OWNDIR/b.jsonl; own_t "$T"; tl "$T" Write "{\"file_path\":\"$R3/f600.txt\",\"content\":\"x\"}"; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R3" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- f600.txt"; then ok "BL037: a path past the 500th dirty entry is still found"
+else no "BL037: >500 dirty (out tail=[$(printf '%s' "$PAYLOAD_OUT" | tail -3)])"; fi
+T=$OWNDIR/c.jsonl; own_t "$T"; tl "$T" Bash "{\"command\":\"touch$ALLNAMES\"}"; own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R3" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- f050.txt" && ! contains "$PAYLOAD_OUT" "- f051.txt" && contains "$PAYLOAD_OUT" "(550 more not shown)"; then
+  ok "BL037: the list is capped at 50 and says how many more were not shown"
+else no "BL037: cap (out tail=[$(printf '%s' "$PAYLOAD_OUT" | tail -3)])"; fi
+
+# F2: an allow-list of tools and fields. Only Write/Edit/MultiEdit/NotebookEdit
+# (file_path, notebook_path) and Bash (command) name a path the session wrote.
+T=$OWNDIR/d.jsonl; own_t "$T"
+tl "$T" SubagentHandback "{\"message\":\"touched $R2/other/o.txt\"}"
+tl "$T" TodoWrite "{\"todos\":[{\"content\":\"fix other/e.txt\"}]}"
+tl "$T" Edit "{\"file_path\":\"$R2/other/n.txt\",\"old_string\":\"other/t.txt\",\"new_string\":\"$R2/other/t.txt\"}"
+own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- other/n.txt" && ! contains "$PAYLOAD_OUT" "other/o.txt" \
+  && ! contains "$PAYLOAD_OUT" "other/e.txt" && ! contains "$PAYLOAD_OUT" "other/t.txt"; then
+  ok "BL037: SubagentHandback, TodoWrite and an Edit's old/new_string do not count as writes"
+else no "BL037: allow-list (out=[$PAYLOAD_OUT])"; fi
+
+# F3: an absolute word counts only inside this repo's toplevel (physical paths).
+T=$OWNDIR/e.jsonl; own_t "$T"
+tl "$T" Edit '{"file_path":"/elsewhere/scripts/x.sh","old_string":"a","new_string":"b"}'
+tl "$T" Write "{\"file_path\":\"$R2/other/o.txt\",\"content\":\"x\"}"
+own_end "$T"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- other/o.txt" && ! contains "$PAYLOAD_OUT" "scripts/x.sh"; then
+  ok "BL037: /elsewhere/scripts/x.sh does not claim this repo's scripts/x.sh; the in-repo absolute path does"
+else no "BL037: absolute path scoping (out=[$PAYLOAD_OUT])"; fi
+
+# F6: one corrupt subagent file does not drop the others.
+T=$OWNDIR/f.jsonl; own_t "$T"; own_end "$T"
+mkdir -p "$OWNDIR/f/subagents"
+printf '{"type":"assistant","message":{"content":[{"tool_use' > "$OWNDIR/f/subagents/agent-1.jsonl"
+tl "$OWNDIR/f/subagents/agent-2.jsonl" Write "{\"file_path\":\"$R2/other/o.txt\",\"content\":\"x\"}"
+run_hook "$(own_prompt handoff "$T" | jq -c --arg c "$R2" '.cwd=$c')" "$TEST_PID" "$PATH"
+if contains "$PAYLOAD_OUT" "- other/o.txt"; then ok "BL037: a corrupt subagent transcript does not hide the readable ones"
+else no "BL037: corrupt subagent file (out=[$PAYLOAD_OUT])"; fi
+
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" = 0 ]
