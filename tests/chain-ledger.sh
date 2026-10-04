@@ -1422,5 +1422,30 @@ else
 fi
 rm -rf "$SANDBOX"
 
+# --- Case NC-stale: the --new: CHARTER confirms nothing --------------------
+#
+# The hook writes that CHARTER from the owner's typed text, so no session wrote
+# it. When links 1 and 2 of the new chain both end bare, link 3 must say no
+# session has ever written a delta, not "stale since link 1" — counting the hook
+# row as a write is a NOTE counted as a confirmation, one provenance over.
+box
+printf 'slug: fresh topic\n\nShip the importer\n' > "$SANDBOX/.claude/tmp/handoff-payload-$CHID"
+printf 'new=1\nslug=fresh topic\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+printf '{"session_id":"F1","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' "$CWD" \
+  > "$SANDBOX/ss-in"
+HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" \
+  "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+link F2 'fresh topic' '' 'NOTE link ended model-free — bare handoff.'
+link F3 'fresh topic' '' 'NOTE link ended model-free — bare handoff.'
+if printf '%s' "$CTX" | grep -q 'CHARTER (set at link 1): Ship the importer' \
+  && printf '%s' "$CTX" | grep -q 'no session has ever written a delta' \
+  && ! printf '%s' "$CTX" | grep -q 'since link 1'; then
+  ok "NC-stale: a --new: chain whose links all ended bare reads as never confirmed"
+else
+  no "NC-stale: the hook-written CHARTER counted as a session write"
+  printf '%s\n' "$CTX" | grep -A2 'STALE' | sed 's/^/     /'
+fi
+rm -rf "$SANDBOX"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

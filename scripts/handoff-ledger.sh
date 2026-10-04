@@ -80,7 +80,8 @@
 # does not confirm either, and for a stronger reason: the retro fires on exactly
 # the model-free links, unconditionally, and it is forbidden to write CLOSE — so
 # it can never establish that an open item still stands. Both are excluded from
-# `lastwrite`, and only those two. Counting it would pin
+# `lastwrite`, and so is a `hook` row: the --new: CHARTER is the owner's typed
+# text, which no session confirmed either. Counting it would pin
 # `lastwrite` to the latest link on every bare handoff and silence the staleness
 # warning permanently — the entry announcing that no model was involved would be
 # the very thing hiding it.
@@ -250,7 +251,7 @@ ledger_render() {
       else label=sprintf("opened at link %s, carried %d links", born[id], age)
       printf "  %-4s %-4s [%s]  %s\n", id, type[id], label, text[id]
     }
-    $3!="NOTE" && $7!="retro" { if ($2+0 > lastwrite) lastwrite=$2+0 }
+    $3!="NOTE" && $7!="retro" && $7!="hook" { if ($2+0 > lastwrite) lastwrite=$2+0 }
     $3=="CHARTER" { charter=$6; charter_n=$2; next }
     $3=="OPEN"    { type[$4]=$5; text[$4]=$6; born[$4]=$2; if (!($4 in seen)) { order[++k]=$4; seen[$4]=1 } ; next }
     $3=="CLOSE"   { closed[$4]=1; e++; ev[e]=sprintf("link %s  closed %s — %s", $2, $4, $6); evn[e]=$2+0; evt[e]=$4 " " $6; next }
