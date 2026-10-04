@@ -74,6 +74,12 @@ if command -v jq >/dev/null 2>&1; then
   if [ -n "$_sid" ] && owns_marker; then
     mkdir -p "${HOME}/.claude/tmp" 2>/dev/null
     printf '%s\n' "$_sid" > "$SESSION_MARKER" 2>/dev/null
+    # One marker per wrapper ever run, one digest per link read: prune both
+    # after a week. A marker goes only once its wrapper is gone too, or a live
+    # long-running wrapper loses its predecessor (BL-031). Covered by Case AL7.
+    find "${HOME}/.claude/tmp" -maxdepth 1 -name 'handoff-session-*' -mtime +7 2>/dev/null \
+      | while IFS= read -r _m; do kill -0 "${_m##*-}" 2>/dev/null || rm -f "$_m"; done
+    find "${HOME}/.claude/tmp" -maxdepth 1 -name 'handoff-digest-*' -mtime +7 -delete 2>/dev/null
   fi
   _src=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null)
   [ -n "$_src" ] && [ "$_src" != "startup" ] && exit 0

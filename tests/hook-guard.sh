@@ -928,6 +928,38 @@ else
 fi
 rm -rf "$SSBOX" "$P_STUB"
 
+# Case AL7 — markers and digests were never pruned (326 markers, 155 digests on
+# 2026-10-04). A marker goes only when it is a week old AND its wrapper is gone:
+# age alone would strip a live long-running wrapper's marker (BL-031). The live
+# PID is $PPID, not $$: $$ is this run's wrapper id, whose marker every ss_run
+# rewrites fresh, so it could never show the kill -0 guard holding.
+sh -c 'exit 0' & AL7_DEAD=$!
+wait "$AL7_DEAD"
+ss_box "" "" ""
+AL7_T="$SSBOX/.claude/tmp"
+printf 'SESS-DEAD\n' > "$AL7_T/handoff-session-$AL7_DEAD"
+printf 'SESS-LIVE\n' > "$AL7_T/handoff-session-$PPID"
+printf 'old\n' > "$AL7_T/handoff-digest-old"
+printf 'new\n' > "$AL7_T/handoff-digest-new"
+touch -t 202001010000 "$AL7_T/handoff-session-$AL7_DEAD" "$AL7_T/handoff-session-$PPID" "$AL7_T/handoff-digest-old"
+ss_run "SESS-PRUNE" "$PATH"
+if [ ! -f "$AL7_T/handoff-session-$AL7_DEAD" ]; then
+  ok "AL7: a week-old marker of a dead wrapper is pruned"
+else
+  no "AL7: week-old dead-PID marker survived (pid=$AL7_DEAD)"
+fi
+if [ -f "$AL7_T/handoff-session-$PPID" ]; then
+  ok "AL7: a week-old marker of a live wrapper is kept"
+else
+  no "AL7: a live wrapper's marker was pruned by age (pid=$PPID)"
+fi
+if [ ! -f "$AL7_T/handoff-digest-old" ] && [ -f "$AL7_T/handoff-digest-new" ]; then
+  ok "AL7: a week-old digest is pruned and a fresh one kept"
+else
+  no "AL7: digest prune wrong (old left=$([ -f "$AL7_T/handoff-digest-old" ] && echo 1 || echo 0) new left=$([ -f "$AL7_T/handoff-digest-new" ] && echo 1 || echo 0))"
+fi
+rm -rf "$SSBOX"
+
 # Case AE2 — `--clean` without stdin still announces itself. CLEAN was only read
 # inside the lineage gate, which needs session_id, so a stdin-less clean start
 # emitted no banner at all — the same silence as the mechanism failing (D3).
