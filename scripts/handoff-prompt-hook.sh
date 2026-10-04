@@ -5,6 +5,7 @@
 #
 #   handoff           → fresh session, no seeded context (with warning in wrapper)
 #   handoff: <text>   → fresh session, <text> injected as additionalContext
+#   handoff <words>   → fresh session, transcript tail + <words> as the owner's instruction
 #
 # Requires: CLAUDE_HANDOFF_ID env var (set by the wrapper).
 # Optional: jq (falls back to grep/sed if missing, so the trigger never
@@ -73,6 +74,8 @@ esac
 # established that it is `handoff` or `handoff:...`. The previous form
 # lowercased the ENTIRE multi-line brief with tr just to test its first token,
 # and parsed the prompt a second time under a different grammar.
+# Reset first: an inherited NO_COLON must not decide which arm a prompt took.
+NO_COLON=""
 case "$FIRSTWORD" in
   *:*)
     # Everything after the first colon. `cut -c9-` was line-oriented and cut 8
@@ -84,6 +87,7 @@ case "$FIRSTWORD" in
     # "handoff" alone, or "handoff something" without a colon. Stripping the
     # first word yields "" in the bare case, so both fold into one arm.
     REST=${TRIMMED#"$FIRSTWORD"}
+    NO_COLON=1
     ;;
 esac
 # One leading-whitespace strip for every arm, rather than one per arm.
@@ -313,10 +317,17 @@ ASK_MAX_BYTES=1024
 # announce "N bytes de contexto sembrado" and relaunch with a stale brief.
 # Covered by hook-guard.sh Case I.
 #
-# Three payload shapes, in precedence order:
+# Four payload shapes, in precedence order:
 #   handoff: <text>  -> the text, verbatim (a curated brief)
 #   handoff --clean  -> no payload; the wrapper announces a clean start
+#   handoff <words>  -> the transcript tail, then <words> as the owner's
+#                       instruction; the words verbatim if no tail
 #   handoff          -> the transcript tail, if one can be extracted
+#
+# `handoff y detente` is not a brief. Written verbatim, it dropped the tail and
+# — since the SessionStart hook keeps any non-tail payload as the chain's
+# curated brief — replaced that brief with a one-liner (7 of 122 stored briefs).
+# Carried under the tail header, the brief survives. Covered by Case AN.
 #
 # `--clean` is tested before the generic non-empty branch because it arrives as
 # PAYLOAD="--clean" and would otherwise be written out as a one-word brief.
@@ -328,7 +339,7 @@ rm -f "$PAYLOAD_FILE"
 
 if [ "$PAYLOAD" = "--clean" ]; then
   : # already unlinked
-elif [ -n "$PAYLOAD" ]; then
+elif [ -n "$PAYLOAD" ] && [ -z "$NO_COLON" ]; then
   printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE" || WRITE_FAILED=1
 elif extract_last_turn; then
   # Truncate on a byte budget, and say so. `head -c` / `tail -c` count bytes, so
@@ -351,7 +362,18 @@ elif extract_last_turn; then
 $ASK
 "
   fi
+  # After the truncation, so a long reply cannot cut it off; unprefixed and
+  # announced, so it reads as the owner speaking and not as quoted data.
+  if [ -n "$PAYLOAD" ]; then
+    TAIL="$TAIL
+
+--- not quoted: typed by the owner with \`handoff\` ---
+OWNER INSTRUCTION FOR THIS SESSION: $PAYLOAD"
+  fi
   printf '%s\n%s%s\n%s\n' "$TAIL_HEADER" "$ASK" "$REPLY_HEADER" "$TAIL" > "$PAYLOAD_FILE" || WRITE_FAILED=1
+elif [ -n "$PAYLOAD" ]; then
+  # `handoff <words>` with no tail to carry them: the words are all there is.
+  printf '%s' "$PAYLOAD" > "$PAYLOAD_FILE" || WRITE_FAILED=1
 else
   # No transcript, no jq, or a transcript with no completed reply yet. Falls
   # through to the wrapper's existing "arranca limpia" warning rather than
@@ -394,8 +416,10 @@ fi
 MECH_FILE="${HANDOFF_DIR}/handoff-ledger-mech-${CLAUDE_HANDOFF_ID}"
 rm -f "$MECH_FILE"
 if [ "$PAYLOAD" != "--clean" ]; then
-  if [ -n "$PAYLOAD" ]; then
+  if [ -n "$PAYLOAD" ] && [ -z "$NO_COLON" ]; then
     MECH_HOW="the owner typed the brief himself (\`handoff: <text>\`)"
+  elif [ -n "$PAYLOAD" ]; then
+    MECH_HOW="\`handoff <words>\` seeded this link's closing reply plus the owner's words"
   else
     MECH_HOW="bare \`handoff\` seeded this link's closing reply verbatim"
   fi

@@ -354,6 +354,7 @@ The `UserPromptSubmit` hook intercepts these before the model runs, so the turn 
 | Typed | Seeds |
 |---|---|
 | `handoff: <text>` | that text, verbatim — the user's own brief |
+| `handoff <words>` | what bare `handoff` seeds, plus `<words>` as the user's instruction for the new session; the chain's curated brief is kept |
 | `handoff` | the last completed turn — the user's ask and the reply that answered it — read from the transcript by the hook, plus the chain's last curated brief and its file paths |
 | `handoff --clean` | nothing; a genuinely empty session |
 

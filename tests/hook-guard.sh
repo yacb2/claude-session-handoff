@@ -1067,6 +1067,52 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Case AN — `handoff <words>` without a colon is an instruction to the next
+# session, not a brief. It used to be written verbatim, so the transcript tail
+# was dropped and the chain's curated brief overwritten with a one-liner (7 of
+# 122 stored briefs; one link was seeded with only "y detente"). The prompt
+# hook's REAL output is fed to the SessionStart hook: a hand-written tail would
+# only re-test the arm AJ already covers. `handoff: <text>` is the control —
+# still verbatim, still replaces the brief — and with no transcript the words
+# still fall back to a verbatim payload rather than being lost.
+AN_PROMPT=$(printf 'handoff y detente' | jq -Rs --arg t "$FIXTURE" '{prompt:., transcript_path:$t}')
+run_hook "$AN_PROMPT" "$TEST_PID" "$PATH"
+AN_TAIL=$PAYLOAD_OUT
+ss_box "prev=SESS-A
+slug=Stop chain" "slug: Stop chain
+## Goal
+AN_CURATED_BRIEF_MARKER" ""
+ss_run "SESS-B" "$PATH"
+AN_BRIEF="$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-A.brief"
+printf 'prev=SESS-B\nslug=Stop chain\n' > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"
+printf '%s' "$AN_TAIL" > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-C" "$PATH"
+AN_CTX=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)
+AN_KEPT=$(cat "$AN_BRIEF" 2>/dev/null)
+run_hook "$(printf 'handoff: y detente' | jq -Rs --arg t "$FIXTURE" '{prompt:., transcript_path:$t}')" "$TEST_PID" "$PATH"
+AN_COLON=$PAYLOAD_OUT
+printf 'prev=SESS-C\nslug=Stop chain\n' > "$SSBOX/.claude/tmp/handoff-title-$SS_CHID"
+printf '%s' "$AN_COLON" > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-D" "$PATH"
+run_hook '{"prompt":"handoff y detente"}' "$TEST_PID" "$PATH"
+AN_NOTAIL=$PAYLOAD_OUT
+case "$AN_TAIL" in '[RAW TRANSCRIPT TAIL'*) AN_LABELLED=1 ;; *) AN_LABELLED=0 ;; esac
+if [ "$AN_LABELLED" = 1 ] && contains "$AN_TAIL" "THE_REPLY line one" \
+  && contains "$AN_TAIL" "OWNER INSTRUCTION FOR THIS SESSION: y detente" \
+  && [ "$(printf '%s' "$AN_KEPT" | sed -n 1p)" = "link=1" ] \
+  && contains "$AN_KEPT" "AN_CURATED_BRIEF_MARKER" \
+  && contains "$AN_CTX" "LAST CURATED BRIEF" \
+  && contains "$AN_CTX" "OWNER INSTRUCTION FOR THIS SESSION: y detente" \
+  && [ "$AN_COLON" = "y detente" ] \
+  && [ "$(cat "$AN_BRIEF")" = "link=3
+y detente" ] \
+  && [ "$AN_NOTAIL" = "y detente" ]; then
+  ok "AN: handoff <words> seeds the tail plus the instruction and keeps the curated brief; handoff: stays verbatim"
+else
+  no "AN: no-colon words mishandled (tail=[$AN_TAIL] kept=[$AN_KEPT] colon=[$AN_COLON] notail=[$AN_NOTAIL])"
+fi
+rm -rf "$SSBOX"
+
 # Case F — no eval query may itself trigger the hook.
 #
 # `claude --settings <overlay>` MERGES with user settings rather than replacing
