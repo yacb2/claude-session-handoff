@@ -1967,6 +1967,25 @@ for _v in "" "${NL}__HANDOFF_DELTA__${NL}TURN a${NL}"; do
   else no "FIRE: refusal touched kept files (rc=$F_RC sent=$F_SENT payload=[$F_PAYLOAD] delta=[$F_DELTA] left=[$F_LEFT])"; fi
 done
 
+# A successful fire keeps it too: the new delta is appended after the kept one,
+# so the earlier link's items reach the ledger one link late instead of never.
+fire "brief${NL}__HANDOFF_DELTA__${NL}TURN b${NL}" seed
+if [ "$F_RC" = 0 ] && [ "$F_SENT" = 1 ] && [ "$F_DELTA" = "OPEN OWED keep${NL}TURN b" ]; then
+  ok "FIRE: a fired delta is appended to a kept one, never over it"
+else no "FIRE: fire replaced the kept delta (rc=$F_RC delta=[$F_DELTA])"; fi
+
+# A delta section of blank lines is empty, by the same predicate as the payload:
+# it must neither replace a kept delta nor create a non-empty file, which the
+# start hook would read as "a model wrote deltas" and so skip the retro.
+fire "brief${NL}__HANDOFF_DELTA__${NL}${NL}  ${NL}" seed
+if [ "$F_RC" = 0 ] && [ "$F_DELTA" = "OPEN OWED keep" ]; then
+  ok "FIRE: a blank-only delta section leaves a kept delta untouched"
+else no "FIRE: blank delta section touched the kept delta (rc=$F_RC delta=[$F_DELTA])"; fi
+fire "brief${NL}__HANDOFF_DELTA__${NL}${NL}"
+if [ "$F_RC" = 0 ] && [ "$F_HAS_DELTA" = 0 ]; then
+  ok "FIRE: a blank-only delta section writes no delta file"
+else no "FIRE: blank delta section wrote a delta file (rc=$F_RC)"; fi
+
 # The separator is compared after trimming [ \t\r], like handoff-ledger.sh does
 # for delta lines.
 for _sep in "__HANDOFF_DELTA__  " "   __HANDOFF_DELTA__" "	__HANDOFF_DELTA__" "__HANDOFF_DELTA__$(printf '\r')"; do

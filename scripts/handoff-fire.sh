@@ -67,8 +67,8 @@ EXIT_TRIGGER="$DIR/handoff-exit-$CLAUDE_HANDOFF_ID"
 
 # Split into .tmp siblings and move them into place only once the brief passes,
 # so a refusal leaves whatever was already there (a degraded start keeps the
-# outgoing delta as its only copy). awk creates the delta only when a line
-# reaches it, so an empty or absent delta section leaves an older one untouched.
+# outgoing delta as its only copy). An empty, blank or absent delta section
+# leaves an older one untouched.
 P_TMP="$PAYLOAD_FILE.tmp"
 D_TMP="$DELTA_FILE.tmp"
 rm -f "$P_TMP" "$D_TMP"
@@ -89,7 +89,16 @@ if ! grep -q '[^[:space:]]' "$P_TMP"; then
   exit 1
 fi
 mv -f "$P_TMP" "$PAYLOAD_FILE" || exit 1
-[ -f "$D_TMP" ] && { mv -f "$D_TMP" "$DELTA_FILE" || exit 1; }
+# A delta of blank lines is empty, by the payload's predicate: a file of them
+# would read as "a model wrote deltas" at the next start and skip the retro.
+# A kept delta is prepended, never replaced: it is an earlier link's only copy.
+if [ -f "$D_TMP" ] && grep -q '[^[:space:]]' "$D_TMP"; then
+  if [ -f "$DELTA_FILE" ]; then
+    cat "$DELTA_FILE" "$D_TMP" > "$D_TMP.new" && mv -f "$D_TMP.new" "$D_TMP" || exit 1
+  fi
+  mv -f "$D_TMP" "$DELTA_FILE" || exit 1
+fi
+rm -f "$D_TMP"
 
 touch "$FLAG_FILE"
 # Signal, never kill: the wrapper's watcher polls this and signals claude itself.
