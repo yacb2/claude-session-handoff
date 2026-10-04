@@ -165,6 +165,20 @@ title_field() {
 CLEAN=$(title_field clean)
 # `handoff --new: <text>`: a new chain like --clean, but seeded (BL-038).
 NEWCHAIN=$(title_field new)
+SKILL_NEW=""
+OLD_CHAIN=""
+OLD_N=""
+# A skill brief (no title file) may open a new chain itself: a `chain: new` line
+# in the same first-5-lines window as `slug:` (BL-044). It needs a slug to name
+# the chain, and rides the very same NEWCHAIN path as `handoff --new:` — nothing
+# is written by the fire script, so the two lineage halves cannot swap and the
+# marker-based prev is untouched. Covered by hook-guard.sh Cases CN1-CN3.
+if [ ! -f "$TITLE_FILE" ] && [ -n "$PAYLOAD_SLUG" ] \
+  && printf '%s\n' "$PAYLOAD" | head -5 \
+    | grep -Eiq '^[[:space:]]*chain:[[:space:]]*new[[:space:]]*$'; then
+  NEWCHAIN=1
+  SKILL_NEW=1
+fi
 
 # Shared by CHAIN CONTEXT and the retro. Newest mtime, never the glob's first
 # match: one session id can resolve to more than one .jsonl, and the path the
@@ -232,6 +246,27 @@ if [ -n "$SESSION_ID" ] && [ -n "$CHAIN_FILE" ]; then
     CHAIN="$SESSION_ID"
     N=1
     PREV=""
+    # A skill brief's `chain: new` still ships deltas, and they belong to the
+    # chain being left: resolve it the way the continuing path does (marker
+    # prev, then the record whose session is that prev).
+    # A prev with no record is a root session: its chain is named after it and
+    # it was link 1, exactly as the continuing path reads it.
+    if [ "$SKILL_NEW" = "1" ]; then
+      _op="$MARKER_PREV"
+      [ -n "$_op" ] || [ ! -f "$CHAIN_FILE" ] || _op=$(jq -r --arg w "$WRAPPER_ID" 'select(.wrapper == $w) | .session // empty' \
+        "$CHAIN_FILE" 2>/dev/null | tail -1)
+      if [ -n "$_op" ]; then
+        _oparent=""
+        [ -f "$CHAIN_FILE" ] && _oparent=$(jq -c --arg s "$_op" 'select(.session == $s)' "$CHAIN_FILE" 2>/dev/null | tail -1)
+        OLD_CHAIN=$(printf '%s' "$_oparent" | jq -r '.chain // empty' 2>/dev/null)
+        if [ -n "$OLD_CHAIN" ]; then
+          OLD_N=$(printf '%s' "$_oparent" | jq -r '.n // 1' 2>/dev/null)
+        else
+          OLD_CHAIN="$_op"
+          OLD_N=1
+        fi
+      fi
+    fi
   else
     # The skill path writes the payload directly and cannot know its own
     # session id, so it leaves `prev` empty. Under one wrapper sessions run
@@ -335,6 +370,9 @@ shq() {
 # ledger the one artifact discarded on a failure that preserves everything else.
 # A `--new:` start is the exception: its delta file, which holds the CHARTER it
 # just wrote, is removed after the gate whatever happened (the NEWCHAIN rm below).
+# So is a skill brief's `chain: new` start: its delta file is split and consumed
+# there, and a degraded start drops it on purpose (the old chain's items are lost
+# with it; a CHARTER left behind would be applied by the next link as its own).
 DELTA_FILE="${HOME}/.claude/tmp/handoff-ledger-${WRAPPER_ID}"
 
 # A delta older than the wrapper process was not written under it: the file is
@@ -387,7 +425,43 @@ LEDGER_FILE=""
 # as `hook`: no session wrote it, and ledger-readout.sh counts session writes.
 # Removed after the gate below whatever happened, like the MECH_FILE.
 DELTA_SRC=session
-if [ "${NEWCHAIN:-}" = "1" ]; then
+OLD_DELTA="$DELTA_FILE.old"
+if [ "$SKILL_NEW" = "1" ]; then
+  # Skill path: the model's own deltas survive. CHARTER lines open the new
+  # chain; everything else (OPEN/CLOSE/TURN) is addressed to the old one, and
+  # is discarded when no parent record names it. No CHARTER line: the first
+  # real sentence of the brief, never a heading, fence or header line.
+  # The new chain's CHARTER is stamped `hook`, like `--new:`'s: this session
+  # wrote nothing, and ledger-readout.sh counts `session` rows as a link that
+  # wrote. The old chain's apply stays `session`: its writer did write.
+  DELTA_SRC=hook
+  rm -f "$OLD_DELTA"
+  _newd=$(mktemp "$DELTA_FILE.new.XXXXXX" 2>/dev/null) || _newd=""
+  if [ -n "$_newd" ]; then
+    if [ -f "$DELTA_FILE" ]; then
+      grep -E '^[[:space:]]*CHARTER([[:space:]]|$)' "$DELTA_FILE" > "$_newd" 2>/dev/null
+      if [ -n "$OLD_CHAIN" ]; then
+        (umask 077; grep -Ev '^[[:space:]]*CHARTER([[:space:]]|$)' "$DELTA_FILE" > "$OLD_DELTA" 2>/dev/null)
+      fi
+    fi
+    if ! grep -q '[^[:space:]]' "$_newd" 2>/dev/null; then
+      _charter=$(printf '%s\n' "$PAYLOAD" | awk '
+        { t = $0; sub(/^[ \t\r]+/, "", t); l = tolower(t) }
+        t == "" || t ~ /^#/ || t ~ /^```/ { next }
+        l ~ /^(slug|mode|chain):/ { next }
+        { print t; exit }')
+      [ -n "$_charter" ] && printf 'CHARTER %s\n' "$_charter" > "$_newd"
+    fi
+    rm -f "$DELTA_FILE"
+    if grep -q '[^[:space:]]' "$_newd" 2>/dev/null; then
+      (umask 077; mv -f "$_newd" "$DELTA_FILE")
+    else
+      rm -f "$_newd"
+    fi
+  else
+    rm -f "$DELTA_FILE"
+  fi
+elif [ "${NEWCHAIN:-}" = "1" ]; then
   rm -f "$DELTA_FILE"
   DELTA_SRC=hook
   case "$PAYLOAD" in
@@ -437,6 +511,11 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
     [ -f "$LEDGER_FILE" ] && _before=$(wc -c < "$LEDGER_FILE" 2>/dev/null | tr -d ' ')
     # Removed only once apply says it appended: the delta file is the outgoing
     # session's only copy. Covered by chain-ledger.sh KD.
+    # `chain: new`: the old chain's deltas go to the old chain's ledger, at the
+    # link that wrote them.
+    if [ "$SKILL_NEW" = "1" ] && [ -n "$OLD_CHAIN" ] && [ -f "$OLD_DELTA" ]; then
+      sh "$LEDGER_SH" apply "${CHAIN_FILE%.jsonl}.${OLD_CHAIN}.ledger" "$OLD_DELTA" "${OLD_N:-1}" session 2>/dev/null
+    fi
     sh "$LEDGER_SH" apply "$LEDGER_FILE" "$DELTA_FILE" "$WROTE_AT" "$DELTA_SRC" 2>/dev/null \
       && rm -f "$DELTA_FILE"
     _after=0
@@ -458,6 +537,7 @@ rm -f "$MECH_FILE"
 # apply it as its own session write and skip the retro it needed. Covered by
 # hook-guard.sh AF2.
 [ "${NEWCHAIN:-}" = "1" ] && rm -f "$DELTA_FILE"
+rm -f "$OLD_DELTA"
 
 # Built here, after the ledger apply, and not with the lineage above: `at` must
 # not precede the rows this start wrote, or a second boundary crossed in

@@ -93,18 +93,20 @@ name it as such: the options, what each costs, and what is already verified>
 <what the next session would trample if it didn't know>
 ```
 
-**The `slug:` line names the chain, and it is the only line the mechanism reads** — besides `mode: idle`, which only the idle-cache case writes. The
+**The `slug:` line names the chain, and it is the only line the mechanism reads** — besides `mode: idle`, which only the idle-cache case writes, and the optional `chain: new` below. The
 `SessionStart` hook takes it from the first five lines of the brief, prefixes the ordinal it
 reads off `~/.claude/handoff-chains/`, and that becomes the session's title in the `--resume`
 picker: `↻3 · Refactor auth`. Without it the new session is auto-titled after its first prompt —
 which is the word *continue* — and a five-session chain renders as five identical rows.
 
-Keep the chain's current slug unless the **subject** of the work changed. A new phase of the same
+Keep the chain's current slug. A new phase of the same
 work is not a new subject: re-describing the chain at every link drifts its name once per hop,
-which is exactly as unreadable as never changing it. In an unattended run the slug is not invented
-at all — take it from the run's artifact (the plan, the loop-spec, the workflow-spec, the audit
-run) and append the phase. That name already exists, it was written down before the first handoff,
+which is exactly as unreadable as never changing it. The one exception is an unattended run, where
+the slug is not invented at all — take it from the run's artifact (the plan, the loop-spec, the
+workflow-spec, the audit run) and append the phase. That name already exists, it was written down before the first handoff,
 and it is more stable than any phrasing produced per hop.
+
+When the **subject** of the work changed, do not re-slug this chain: add a line `chain: new` within the first five lines, under a `slug:` that names the new subject. The successor then starts a new chain (link 1) instead of continuing this one. Never for a new phase or step of the same work, and never without the `slug:` line. The handoff still writes its deltas: `CLOSE`/`OPEN`/`TURN` land on the old chain, and a `CHARTER` delta opens the new one (without one, the brief's first sentence does).
 
 One line, and no ordinal of your own — the ordinal comes from the record, and a hand-written one
 would be counted twice.
@@ -161,7 +163,8 @@ they belong in the brief, where re-verifying them each hop is correct.
 
 **Every handoff writes its deltas.** Nothing changed is a legitimate answer and means writing
 none — but a session that settled an owed item and did not close it leaves every later link
-reading a question the user already answered.
+reading a question the user already answered. A `chain: new` handoff is no exception: its
+deltas are written, and land as described above.
 
 Drafting rules:
 - Be terse. Skip any section that adds nothing — **except `Next concrete step`**, which is never

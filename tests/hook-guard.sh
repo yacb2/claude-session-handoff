@@ -1137,6 +1137,145 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Cases CN1-CN3 — a skill brief may open a NEW chain with a `chain: new` line in
+# its first five lines (BL-044). The skill path leaves no title file; the marker
+# names the predecessor, and the record has it at link 2 of chain c1.
+CN_REC='{"chain":"c1","n":2,"slug":"Refactor auth","session":"SESS-A","prev":"SESS-0","wrapper":"'"$SS_CHID"'","at":"2026-08-19T10:00:00Z"}'
+cn_run() {
+  ss_box "" "$1" "$CN_REC"
+  printf 'SESS-A\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+  ss_run "SESS-NEXT" "$PATH"
+}
+
+# CN1 — `chain: new` + `slug:` starts link 1 of a chain named for this session,
+# and with no CHARTER delta its CHARTER is the brief's goal sentence: never the
+# `## Current goal` heading or the `chain: new` line. Case-insensitive match.
+# Stamped `hook`: this session wrote nothing (ledger-readout counts `session`).
+cn_run "slug: Billing rewrite
+Chain: New
+
+## Current goal
+Replace the invoice engine with the new billing service."
+CN_NEW_LEDGER="$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-NEXT.ledger"
+CN1_CH=$(awk -F'\t' '$3=="CHARTER" {print $6 "|" $7}' "$CN_NEW_LEDGER" 2>/dev/null)
+if [ "$SS_TITLE" = "Billing rewrite" ] && [ "$(ss_field .n)" = "1" ] \
+  && [ "$(ss_field .chain)" = "SESS-NEXT" ] && [ "$(ss_field .prev)" = "" ] \
+  && [ "$(ss_field .slug)" = "Billing rewrite" ] && [ "$SS_LINES" = 2 ]; then
+  ok "CN1: a skill brief with 'chain: new' starts link 1 of a new chain"
+else no "CN1: not a new chain (title=[$SS_TITLE] rec=[$SS_REC] lines=$SS_LINES)"; fi
+if [ "$CN1_CH" = "Replace the invoice engine with the new billing service.|hook" ]; then
+  ok "CN1: the fallback CHARTER is the goal sentence, stamped hook"
+else no "CN1: wrong fallback CHARTER ([$CN1_CH])"; fi
+rm -rf "$SSBOX"
+
+# CN1b — a lowercase `charter x` is not a CHARTER delta (ledger_apply matches
+# the verb case-sensitively), so routing falls back to the brief's sentence.
+CN_BRIEF1="slug: Billing rewrite
+chain: new
+
+## Current goal
+Replace the invoice engine."
+ss_box "" "$CN_BRIEF1" "$CN_REC"
+printf 'SESS-A\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+printf 'charter lowercase text\n' > "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID"
+ss_run "SESS-NEXT" "$PATH"
+CN1B=$(awk -F'\t' '$3=="CHARTER" {print $6}' "$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-NEXT.ledger" 2>/dev/null)
+if [ "$CN1B" = "Replace the invoice engine." ]; then
+  ok "CN1b: a lowercase 'charter' line falls back to the brief's sentence"
+else no "CN1b: wrong CHARTER ([$CN1B])"; fi
+rm -rf "$SSBOX"
+
+# CN2 — the model's deltas survive `chain: new`: CLOSE lands on the OLD chain's
+# ledger (at the link that wrote it, source session), CHARTER opens the new one,
+# and an OPEN written in the same delta is addressed to the old chain, not the
+# new one (which holds exactly one row, the CHARTER).
+ss_box "" "$CN_BRIEF1" "$CN_REC"
+printf 'SESS-A\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+printf 'CLOSE d1 shipped\nOPEN OWED pick vendor\nCHARTER Billing is its own chain\n' > "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID"
+printf '2026-08-19T10:00:00Z\t1\tOPEN\td1\tOWED\tdecide the release\tsession\n' > "$SSBOX/.claude/handoff-chains/${SS_KEY}.c1.ledger"
+ss_run "SESS-NEXT" "$PATH"
+CN2_OLD=$(awk -F'\t' '$3=="CLOSE" {print $2 "|" $4 "|" $7}' "$SSBOX/.claude/handoff-chains/${SS_KEY}.c1.ledger" 2>/dev/null)
+CN2_OLD_OPEN=$(awk -F'\t' '$3=="OPEN" && $4=="d2" {print $2 "|" $6}' "$SSBOX/.claude/handoff-chains/${SS_KEY}.c1.ledger" 2>/dev/null)
+CN2_NEW=$(awk -F'\t' '$3=="CHARTER" {print $6 "|" $7}' "$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-NEXT.ledger" 2>/dev/null)
+CN2_ROWS=$(wc -l < "$SSBOX/.claude/handoff-chains/${SS_KEY}.SESS-NEXT.ledger" 2>/dev/null | tr -d ' ')
+if [ "$CN2_OLD" = "2|d1|session" ] && [ "$CN2_OLD_OPEN" = "2|pick vendor" ]; then
+  ok "CN2: the CLOSE and OPEN land on the old chain's ledger at the writing link"
+else no "CN2: old ledger wrong ([$CN2_OLD] [$CN2_OLD_OPEN])"; fi
+if [ "$CN2_NEW" = "Billing is its own chain|hook" ] && [ "$CN2_ROWS" = 1 ] \
+  && [ -z "$(ls "$SSBOX/.claude/tmp" | grep 'handoff-ledger-')" ]; then
+  ok "CN2: the new ledger holds only the CHARTER (stamped hook) and nothing is left behind"
+else no "CN2: new ledger wrong or leftovers ([$CN2_NEW] rows=$CN2_ROWS $(ls "$SSBOX/.claude/tmp"))"; fi
+# A bare link 2 on the new chain: the readout must not count link 1 as a link
+# that wrote, because no session did.
+printf 'SESS-NEXT\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+printf 'slug: Billing rewrite\n## Goal\nnext' > "$SSBOX/.claude/tmp/handoff-payload-$SS_CHID"
+ss_run "SESS-LINK2" "$PATH"
+CN2_RO=$(HOME="$SSBOX" sh "$REPO/scripts/ledger-readout.sh" 2>/dev/null | awk '$1 ~ /\.SESS-N$/ {print $2 "|" $3 "|" $4}')
+if [ "$CN2_RO" = "2|1|0" ]; then
+  ok "CN2: ledger-readout shows 'wrote 0' for the new chain"
+else no "CN2: readout wrong for the new chain ([$CN2_RO])"; fi
+rm -rf "$SSBOX"
+
+# CN2b — the marker's prev has no chain record (a root session): its chain is
+# named after it at link 1, as the continuing path reads it, so its deltas land
+# on that chain's ledger instead of being dropped.
+ss_box "" "$CN_BRIEF1" ""
+printf 'ROOT-1\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+printf 'OPEN OWED pick vendor\n' > "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID"
+ss_run "SESS-NEXT" "$PATH"
+CN2B=$(awk -F'\t' '$3=="OPEN" {print $2 "|" $4 "|" $6 "|" $7}' "$SSBOX/.claude/handoff-chains/${SS_KEY}.ROOT-1.ledger" 2>/dev/null)
+if [ "$CN2B" = "1|d1|pick vendor|session" ]; then
+  ok "CN2b: a root predecessor's deltas land on its own chain's ledger"
+else no "CN2b: root chain delta lost ([$CN2B])"; fi
+rm -rf "$SSBOX"
+
+# CN3 — each ignored shape is its own result.
+# (a) `chain: new` beyond line 5 continues the chain.
+cn_run "slug: Refactor auth
+## Goal
+a
+b
+c
+chain: new"
+CN3_A="$SS_TITLE|$(ss_field .n)"; rm -rf "$SSBOX"
+if [ "$CN3_A" = "↻3 · Refactor auth|3" ]; then
+  ok "CN3a: 'chain: new' past line 5 is ignored"
+else no "CN3a: past-line-5 case misbehaved ([$CN3_A])"; fi
+# (b) inside prose, not a line of its own.
+cn_run "slug: Refactor auth
+## Goal
+Do not write chain: new unless the subject changed."
+CN3_B="$SS_TITLE|$(ss_field .n)"; rm -rf "$SSBOX"
+if [ "$CN3_B" = "↻3 · Refactor auth|3" ]; then
+  ok "CN3b: 'chain: new' inside prose is ignored"
+else no "CN3b: prose case misbehaved ([$CN3_B])"; fi
+# (c) no slug: nothing is a new chain, so a pending delta file is not consumed
+# and no new-chain banner is shown.
+ss_box "" "## Goal
+chain: new" "$CN_REC"
+printf 'SESS-A\n' > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+printf 'TURN keep me\n' > "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID"
+ss_run "SESS-NEXT" "$PATH"
+CN3_MSG=$(printf '%s' "$SS_OUT" | jq -r '.systemMessage // empty' 2>/dev/null)
+if [ "$SS_LINES" = 1 ] && ! contains "$CN3_MSG" "cadena nueva" \
+  && [ -f "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID" ]; then
+  ok "CN3c: 'chain: new' without a slug is ignored and leaves the delta file"
+else no "CN3c: no-slug case misbehaved (lines=$SS_LINES msg=[$CN3_MSG])"; fi
+rm -rf "$SSBOX"
+
+# CN4 — a title file present (the typed `handoff:` path) means a `chain: new`
+# line in the payload is just text: the chain continues.
+ss_box "prev=SESS-A
+slug=Refactor auth" "slug: Refactor auth
+chain: new
+## Goal
+x" "$CN_REC"
+ss_run "SESS-NEXT" "$PATH"
+if [ "$SS_TITLE" = "↻3 · Refactor auth" ] && [ "$(ss_field .n)" = "3" ] && [ "$(ss_field .chain)" = "c1" ]; then
+  ok "CN4: with a title file, 'chain: new' in the payload does not break the chain"
+else no "CN4: title-file path started a new chain (title=[$SS_TITLE] rec=[$SS_REC])"; fi
+rm -rf "$SSBOX"
+
 # Case AJ — the last curated brief survives a model-free link, and the
 # successor is told where the chain lives. Three arrivals on one chain:
 #   link 2 arrives with a drafted brief      -> kept as <key>.<chain>.brief, 0600
