@@ -612,10 +612,10 @@ ss_box() {
   fi
 }
 
-# ss_run <session-id> <path-override>
+# ss_run <session-id> <path-override> [source]   (source defaults to startup)
 ss_run() {
-  SS_OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
-    "$1" "$CHAIN_CWD" \
+  SS_OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"SessionStart","source":"%s"}' \
+    "$1" "$CHAIN_CWD" "${3:-startup}" \
     | HOME="$SSBOX" PATH="$2" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" 2>/dev/null)
   SS_TITLE=$(printf '%s' "$SS_OUT" | jq -r '.hookSpecificOutput.sessionTitle // empty' 2>/dev/null)
   SS_REC_FILE="$SSBOX/.claude/handoff-chains/${SS_KEY}.jsonl"
@@ -856,6 +856,26 @@ if [ "$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)" = "SESS-
   ok "AL3: an ordinary start records its session id in the marker and writes nothing else"
 else
   no "AL3: ordinary start did not leave the marker (title=[$SS_TITLE] lines=$SS_LINES marker=[$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)])"
+fi
+rm -rf "$SSBOX"
+
+# Case AL4 — a resume records the marker and does nothing else. SessionStart is
+# registered for `resume` too (smoke.sh Case 10) so the resumed session's id
+# reaches the marker; without that, the next skill handoff finds no predecessor
+# and splits the chain (BL-031). But a resume is not the fresh start a handoff
+# launches, so a payload or title file waiting under this wrapper belongs to
+# that start: consuming it here would seed the wrong session and record a link
+# that never happened.
+ss_box "prev=SESS-A
+slug=Refactor auth" "a brief for the next fresh start" ""
+printf '%s\n' "SESS-OLD" > "$SSBOX/.claude/tmp/handoff-session-$SS_CHID"
+ss_run "SESS-RESUMED" "$PATH" resume
+if [ "$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)" = "SESS-RESUMED" ] \
+  && [ "$SS_TITLE_LEFT" = 1 ] && [ "$SS_PAYLOAD_LEFT" = 1 ] && [ -z "$SS_OUT" ] \
+  && [ "$SS_LINES" = 0 ] && [ ! -d "$SSBOX/.claude/handoff-chains" ]; then
+  ok "AL4: a resume records its session id in the marker and leaves payload, title and chain alone"
+else
+  no "AL4: resume did more than mark (marker=[$(cat "$SSBOX/.claude/tmp/handoff-session-$SS_CHID" 2>/dev/null)] title_left=$SS_TITLE_LEFT payload_left=$SS_PAYLOAD_LEFT lines=$SS_LINES out=[$SS_OUT])"
 fi
 rm -rf "$SSBOX"
 

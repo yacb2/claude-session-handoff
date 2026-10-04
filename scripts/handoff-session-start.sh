@@ -42,12 +42,19 @@ TITLE_FILE="${HOME}/.claude/tmp/handoff-title-${WRAPPER_ID}"
 SESSION_MARKER="${HOME}/.claude/tmp/handoff-session-${WRAPPER_ID}"
 MARKER_PREV=""
 [ -f "$SESSION_MARKER" ] && MARKER_PREV=$(head -1 "$SESSION_MARKER" 2>/dev/null | tr -d '\000-\037')
+#
+# The hook is registered for `resume` for this marker alone. A resume is not the
+# fresh start a handoff launches, so it stops here: a payload or title file
+# waiting under this wrapper belongs to that start. An empty source (no stdin)
+# falls through, as before. Covered by hook-guard.sh Case AL4.
 if command -v jq >/dev/null 2>&1; then
   _sid=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
   if [ -n "$_sid" ]; then
     mkdir -p "${HOME}/.claude/tmp" 2>/dev/null
     printf '%s\n' "$_sid" > "$SESSION_MARKER" 2>/dev/null
   fi
+  _src=$(printf '%s' "$INPUT" | jq -r '.source // empty' 2>/dev/null)
+  [ -n "$_src" ] && [ "$_src" != "startup" ] && exit 0
 fi
 
 # Every ordinary `claude` start lands here. It must write nothing at all — no

@@ -214,21 +214,29 @@ assert "wrapper byte-identical across repos" \
 assert "both declare the same version" \
   '[ "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_HANDOFF/scripts/claude-wrapper.sh")" = "$(awk "/^# claude-wrapper version:/{print \$4;exit}" "$REPO_RESTART/scripts/claude-wrapper.sh")" ]'
 
-# --- Case 10: the SessionStart hook is scoped to `startup` ---
+# --- Case 10: the SessionStart hook is scoped to `startup|resume` ---
 # Registered with no matcher, the group activates on every SessionStart reason —
 # startup, resume, clear, compact and fork — so the hook runs, and CONSUMES the
 # payload, on a /clear or /compact too. The matcher vocabulary is the documented
 # one, not a guess: startup | resume | clear | compact | fork, and an omitted
 # matcher means all of them.
 #
-# The handoff always launches a fresh process (never --resume), so `startup` is
-# the only reason that can carry a payload.
+# The handoff always launches a fresh process, so `startup` is the only reason
+# that can carry a payload. `resume` is there for the BL-031 session marker
+# alone: a session resumed under a new wrapper must still record its id, or the
+# next skill handoff opens a new chain. The hook itself stops after the marker
+# on any reason but `startup` (hook-guard.sh Case AL4).
+SS_SCOPED='(.hooks.SessionStart // []) | any(
+  (.hooks | any(.command | test("handoff-session-start")))
+  and ((.matcher // "") as $m
+    | all("startup", "resume"; test("^(" + $m + ")$"))
+    and all("clear", "compact"; test("^(" + $m + ")$") | not)))'
 echo "Case 10: SessionStart is scoped, UserPromptSubmit is not"
 new_sandbox case10
 run_handoff
 SETTINGS="$CLAUDE_DIR/settings.json"
-assert "SessionStart hook carries matcher=startup" \
-  'jq -e "(.hooks.SessionStart // []) | any((.matcher == \"startup\") and (.hooks | any(.command | test(\"handoff-session-start\"))))" "$SETTINGS" >/dev/null'
+assert "SessionStart hook matches startup and resume, not clear or compact" \
+  'jq -e "$SS_SCOPED" "$SETTINGS" >/dev/null'
 assert "no unscoped group holds the SessionStart hook" \
   'jq -e "(.hooks.SessionStart // []) | any((.matcher == null) and (.hooks | any(.command | test(\"handoff-session-start\")))) | not" "$SETTINGS" >/dev/null'
 # UserPromptSubmit has no session-start reason to filter on, so it stays unscoped.
@@ -259,7 +267,7 @@ EOF
 run_handoff
 SETTINGS="$CLAUDE_DIR/settings.json"
 assert "10b unscoped registration gained the matcher" \
-  'jq -e "(.hooks.SessionStart // []) | any((.matcher == \"startup\") and (.hooks | any(.command | test(\"handoff-session-start\"))))" "$SETTINGS" >/dev/null'
+  'jq -e "$SS_SCOPED" "$SETTINGS" >/dev/null'
 assert "10b the hook is registered exactly once" \
   '[ "$(jq "[.hooks.SessionStart[]?.hooks[]? | select(.command | test(\"handoff-session-start\"))] | length" "$SETTINGS")" -eq 1 ]'
 

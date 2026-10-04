@@ -522,11 +522,14 @@ install() {
     fi
   fi
 
-  # Scoped to `startup`: the handoff always launches a fresh process, never
-  # --resume, so that is the only reason that can carry a payload. Left
-  # unscoped, the hook also ran — and consumed the payload — on clear, compact,
-  # resume and fork. UserPromptSubmit has no such reason to filter on.
-  add_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh" startup
+  # Scoped to `startup|resume`. The handoff always launches a fresh process, so
+  # `startup` is the only reason that can carry a payload. `resume` is there for
+  # the BL-031 session marker alone: a session resumed under a new wrapper must
+  # record its id or the next skill handoff opens a new chain; the hook stops
+  # after the marker on any reason but `startup`. Left unscoped, the hook also
+  # ran — and consumed the payload — on clear, compact and fork. UserPromptSubmit
+  # has no such reason to filter on.
+  add_hook SessionStart "$CLAUDE_REF/scripts/handoff-session-start.sh" 'startup|resume'
   add_hook UserPromptSubmit "$CLAUDE_REF/scripts/handoff-prompt-hook.sh"
   # Async: it sleeps ~54 min after every Stop. asyncRewake: exit 2 wakes the
   # idle session with the hook's stderr, before the prompt cache expires.
