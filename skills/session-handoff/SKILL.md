@@ -62,14 +62,7 @@ This list is the authoritative one. `when_to_use` carries the same exclusions so
 
 ## Why handoff vs. /compact
 
-| | /compact | /handoff |
-|---|---|---|
-| Tokens | Processes the entire conversation to summarize | Only the current turn that produces the prompt |
-| Time | Slow on large sessions, can fail | Near-instant |
-| Process | Same process — stale hooks, stale binary | Fresh process: hooks, skills, MCP, binary up to date |
-| Residual context | Summary + new turns accumulate | Zero — starts clean with only the seeded prompt |
-
-When the user just needs to "keep working in a clean session", handoff wins on cost and speed.
+Handoff costs only the turn that writes the prompt, is near-instant, reloads hooks, skills, MCP and the binary, and starts with zero residual context; `/compact` re-processes the whole conversation and keeps a stale process.
 
 ## How to execute the handoff
 
@@ -122,11 +115,7 @@ A session in an established chain opens with a `=== CHAIN LEDGER ===` block abov
 It is not something a previous session re-typed: it is a per-chain file the `SessionStart` hook
 renders with no model involved, and an item leaves it **only when a `CLOSE` delta closes it**.
 
-That block exists because the brief cannot hold these things. The brief is re-drafted from
-scratch at every hop, so it carries what the outgoing session happened to touch and drops the
-rest — items owed to the user worst of all. And bare `handoff` seeds the transcript tail with no
-model in the loop, so no rule written here can reach those links. The ledger can, which is the
-whole reason it is a file and not a better instruction.
+The brief is re-drafted at every hop and drops what the outgoing session did not touch, items owed to the user worst of all, and bare `handoff` runs no model, so only a file can carry them.
 
 **Do not re-type ledger items into the brief.** They are already carried, and copying them back
 is how the two records start disagreeing. The brief keeps what it is good at: the volatile
@@ -142,14 +131,7 @@ Three kinds of thing go in, and nothing else:
 | `CLOSE d<n> <how>` | Settled. `d<n>` is the id shown in the rendered block. |
 | `TURN <text>` | The work changed direction — an approach dropped because something worked better, a problem found mid-execution, a decision taken on the fly. Not an obligation and nothing closes it; it renders in the chain's trajectory. **Name the item id when a turn bears on one** — `TURN d1 turned out to depend on X` — because that is what carries the entry forward once it falls outside the trajectory window. |
 
-There is a fifth verb, `NOTE`, and it is **not yours to write**. The hooks use it for the
-model-free paths — one pointer saying the link ended via bare `handoff` and where its
-closing reply is. It renders in the trajectory alongside `TURN` and it deliberately does
-**not** count as a confirmation: the staleness warning measures links since anything
-*confirmed* what the ledger holds, and neither a hook pointer nor a retro recovery is
-that. Nothing rejects a `NOTE` you write — it is simply counted nowhere, so using one in
-place of a `TURN` makes that link's work invisible in the number the automation decision
-is pinned to. Write `TURN`.
+There is a fifth verb, `NOTE`, written only by the hooks and **not yours to write**: it counts nowhere, so using it in place of `TURN` hides that link's work from the staleness count. Write `TURN`.
 
 ### The predecessor retro — the links no session could write for
 
@@ -159,30 +141,7 @@ away with a cold cache that means re-sending the whole conversation just to ask 
 the **arriving** session — empty context, warm cache by construction — reads its
 predecessor's transcript off disk and writes that link's deltas before it does anything else.
 
-When it applies, the `SessionStart` hook injects a `=== PREDECESSOR RETRO ===` block with
-the exact commands. It appears **only** where no model wrote deltas for the previous link;
-where one did, its account is already in hand and a second pass would be a worse copy of it.
-Two things about it are worth knowing before you follow it:
-
-- **Delegate it.** The digest is built by `handoff-retro-filter.py` — mechanical, no model,
-  under a second even on a very large transcript. Then **one subagent on a small model**
-  reads that digest, launched with an explicit read-only or lookup `subagent_type`, never
-  unset and never `general-purpose` (a settings deny on the default types refuses an unset one).
-  The whole saving is that you never read the transcript yourself.
-- **Hand it what is already open.** The digest has the ledger block cut out, so the agent
-  cannot know which items the chain already carries and will re-open them in its own words.
-  The retro block pastes the open items into step 2 for that reason; an `OWED` is a decision
-  the owner has not made, never a task the next session will simply do.
-- **It may not write `CLOSE`.** The agent is reading a transcript, and a transcript quotes
-  the predecessor's own rendered ledger block, live ids and all. One echoed id would retire
-  a real open item permanently — the single thing this mechanism promises cannot happen by
-  accident. `TURN` and `OPEN` only. Three guards, because prose is not a control over the
-  record it writes into: the filter cuts the ledger block out of the digest, the instruction
-  forbids the verb, and `apply` **refuses** a `CLOSE` at `retro` provenance outright.
-- **Run its commands exactly as emitted, at column 0.** Step 3 is a quoted heredoc, so an
-  indented terminator does not terminate it: the shell swallows the two commands after it
-  into the file, nothing is recorded, and the digest is left on disk. Do not indent the
-  delta lines either.
+When the hook injects a `=== PREDECESSOR RETRO ===` block (only where no model wrote that link's deltas), run its commands exactly as emitted, at column 0 and with unindented delta lines (an indented heredoc terminator swallows the commands after it). Delegate the digest to one small-model subagent with an explicit read-only or lookup `subagent_type` (never unset or `general-purpose`), hand it the open items the block pastes (an `OWED` is a decision the owner has not made), and never let it write `CLOSE`, only `TURN` and `OPEN`: a transcript quotes live ledger ids, and `apply` refuses a retro `CLOSE`.
 
 **Correcting something an earlier link got wrong needs no rewrite, and must not get
 one.** The file is append-only. `CLOSE` the item with what actually turned out, then
@@ -271,14 +230,7 @@ with `dangerouslyDisableSandbox: true` — the ancestry walk needs the process t
 hides it. That is the only reason to disable the sandbox here, and the script tells you when it
 applies.
 
-The script refuses in two cases. Unset `$CLAUDE_HANDOFF_ID` is the one you can guess: without the
-check it would write `handoff-payload-`, `handoff-flag-` and `handoff-exit-` with an empty suffix —
-files no wrapper is watching — and report success. The second is the one you cannot: the wrapper
-exports `$CLAUDE_HANDOFF_ID` as its own PID, and **every descendant inherits it**, including
-sessions the wrapper never launched and does not supervise — a `--fork-session`, a `--resume`, a
-harness background job. There the variable is set and its wrapper is long dead, so a set/unset test
-passes in exactly the case it exists to catch. What separates the two is ancestry, which is why the
-script walks the parent chain.
+The script refuses when `$CLAUDE_HANDOFF_ID` is unset, and also when it is set but its wrapper is dead (the wrapper exports it as its own PID and every descendant inherits it, including `--fork-session`, `--resume` and harness jobs), which it detects by walking the parent chain.
 
 stdin is the brief. A line that is exactly `__HANDOFF_DELTA__` ends the brief: what follows is the
 ledger deltas, one per line (OPEN / CLOSE / TURN / CHARTER), written to the delta file. The delta
