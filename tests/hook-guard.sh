@@ -1121,6 +1121,21 @@ else
 fi
 rm -rf "$SSBOX"
 
+# Case AF2 — a `--new:` start with no stdin has no chain to write its CHARTER
+# to, so the CHARTER must not be left in the wrapper's delta file: the next
+# link under this wrapper would apply it as its own session write and the
+# retro that link needed would be skipped.
+ss_box "new=1
+slug=fresh" "Redesign the landing page" ""
+SS_OUT=$(HOME="$SSBOX" PATH="$PATH" CLAUDE_HANDOFF_ID="$SS_CHID" sh "$SS_HOOK" </dev/null 2>/dev/null)
+if contains "$SS_OUT" "Redesign the landing page" \
+  && [ ! -e "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID" ]; then
+  ok "AF2: a stdin-less --new: start leaves no CHARTER in the delta file"
+else
+  no "AF2: the hook CHARTER outlived a start with no chain ($(cat "$SSBOX/.claude/tmp/handoff-ledger-$SS_CHID" 2>/dev/null))"
+fi
+rm -rf "$SSBOX"
+
 # Case AJ — the last curated brief survives a model-free link, and the
 # successor is told where the chain lives. Three arrivals on one chain:
 #   link 2 arrives with a drafted brief      -> kept as <key>.<chain>.brief, 0600

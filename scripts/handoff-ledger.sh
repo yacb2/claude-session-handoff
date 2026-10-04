@@ -163,6 +163,10 @@ ledger_apply() {
     _verb=$(printf '%s' "$_line" | awk '{print $1}')
     case "$_verb" in
       CHARTER)
+        # Refused from a retro like CLOSE: a transcript can quote the charter,
+        # and render keeps the last one, so a recovered CHARTER would replace
+        # the one the chain was opened with.
+        [ "$_src" = "retro" ] && continue
         _text=$(sanitize "$(printf '%s' "$_line" | cut -d' ' -f2-)")
         [ -n "$_text" ] || continue
         _out="${_out}${_at}	${_n}	CHARTER	-	-	${_text}	${_src}

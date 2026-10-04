@@ -359,6 +359,7 @@ LEDGER_FILE=""
 # `--new:` discards it too, and puts its own CHARTER there for the apply below:
 # the typed text's first line, skipping a `slug:` line and a raw tail. Applied
 # as `hook`: no session wrote it, and ledger-readout.sh counts session writes.
+# Removed after the gate below whatever happened, like the MECH_FILE.
 DELTA_SRC=session
 if [ "${NEWCHAIN:-}" = "1" ]; then
   rm -f "$DELTA_FILE"
@@ -400,7 +401,7 @@ if [ -n "${CHAIN:-}" ] && [ -n "$CHAIN_FILE" ] && [ "${CLEAN:-}" != "1" ]; then
     _prev_at=$(printf '%s' "${PARENT:-}" | jq -r '.at // empty' 2>/dev/null)
     OWN_ROWS=""
     [ -f "$LEDGER_FILE" ] && OWN_ROWS=$(awk -F'\t' -v n="$WROTE_AT" -v at="$_prev_at" '
-      $2 == n && $3 != "NOTE" && $7 != "retro" && (at == "" || $1 > at) {
+      $2 == n && $3 != "NOTE" && $7 != "retro" && $7 != "hook" && (at == "" || $1 > at) {
         printf "     %s", $3
         if ($4 != "-") printf " %s", $4
         if ($5 != "-") printf " %s", $5
@@ -426,6 +427,11 @@ fi
 # Unconditional: a pointer that survives a skipped branch would be stamped on
 # the NEXT link, saying "model-free" of a link whose model wrote deltas.
 rm -f "$MECH_FILE"
+# The same for a `--new:` CHARTER the gate did not apply (no chain, no ledger
+# script, a failed apply): left behind, the next link under this wrapper would
+# apply it as its own session write and skip the retro it needed. Covered by
+# hook-guard.sh AF2.
+[ "${NEWCHAIN:-}" = "1" ] && rm -f "$DELTA_FILE"
 
 # Built here, after the ledger apply, and not with the lineage above: `at` must
 # not precede the rows this start wrote, or a second boundary crossed in

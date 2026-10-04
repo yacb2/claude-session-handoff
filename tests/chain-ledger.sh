@@ -1214,6 +1214,17 @@ else
   cat "$YL" | sed 's/^/     /'
 fi
 
+# A retro reads a transcript, and a transcript can quote the charter; render
+# keeps the LAST charter, so a recovered one would replace the owner's for good.
+printf 'CHARTER a charter the retro made up\nTURN a recovered turn\n' > "$SANDBOX/d.txt"
+sh "$LEDGER_SH" apply "$YL" "$SANDBOX/d.txt" 3 retro
+if ! grep -q 'the retro made up' "$YL" && grep -q '	TURN	-	-	a recovered turn	retro$' "$YL"; then
+  ok "X3: apply refuses a CHARTER from the retro and keeps the rest of its delta"
+else
+  no "X3: a retro-sourced CHARTER reached the ledger"
+  cat "$YL" | sed 's/^/     /'
+fi
+
 # --- Case Y: the emitted commands are RUN, not read ------------------------
 #
 # Every retro case above greps the block. That is how the block shipped with a
