@@ -799,6 +799,36 @@ else
   printf '%s\n' "$_retro" | head -12 | sed 's/^/     /'
 fi
 
+# --- Case R2d: a `--new:` link whose record append failed (the `hook` clause) --
+#
+# S1 opened with `--new:`, so its ledger holds a CHARTER stamped `hook`, written
+# by no session; its chain record never landed, so there is no `at` floor to
+# exclude it by time. Only the `$7 != "hook"` clause keeps that row out of
+# OWN_ROWS. Without it the retro claims S1 "wrote these rows", and the hook's
+# NOTE is suppressed for a link that really ended model-free.
+retro_box
+mkdir -p "$SANDBOX/.claude/handoff-chains"
+printf '2000-01-01T00:00:00Z\t1\tCHARTER\t-\t-\tx\thook\n' \
+  > "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger"
+fake_transcript S1
+printf 'slug=chain s\nprev=S1\n' > "$SANDBOX/.claude/tmp/handoff-title-$CHID"
+printf 'NOTE link ended model-free — bare handoff.\n' > "$SANDBOX/.claude/tmp/handoff-ledger-mech-$CHID"
+printf '{"session_id":"S2","cwd":"%s","hook_event_name":"SessionStart","source":"startup"}' \
+  "$CWD" > "$SANDBOX/ss-in"
+HOME="$SANDBOX" CLAUDE_HANDOFF_ID="$CHID" PATH="$FAKE/bin:$PATH" \
+  "$FAKE/claude" -c 'sh "$0"; exit $?' "$SS_HOOK" < "$SANDBOX/ss-in" > "$SANDBOX/ss-out" 2>/dev/null
+CTX=$(jq -r '.hookSpecificOutput.additionalContext // empty' "$SANDBOX/ss-out" 2>/dev/null)
+_retro=$(printf '%s\n' "$CTX" | sed -n '/=== PREDECESSOR RETRO/,/=== END PREDECESSOR RETRO/p')
+if printf '%s' "$_retro" | grep -q 'No ledger delta reached' \
+  && ! printf '%s' "$_retro" | grep -q 'wrote these rows' \
+  && awk -F'\t' '$2 == 1 && $3 == "NOTE" { f = 1 } END { exit !f }' "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger"; then
+  ok "R2d: a hook-stamped row is not the link's own — full retro intro and the NOTE stay"
+else
+  no "R2d: a hook-sourced CHARTER was listed as the previous link's own write"
+  printf '%s\n' "$_retro" | head -8 | sed 's/^/     /'
+  sed 's/^/     /' "$SANDBOX/.claude/handoff-chains/$KEY.S1.ledger"
+fi
+
 # --- Case R3: nothing to read degrades to silence --------------------------
 #
 # Every other path in these hooks degrades to silence. An instruction pointing

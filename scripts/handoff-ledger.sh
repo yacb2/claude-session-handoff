@@ -78,9 +78,9 @@
 # line below measures how many links have passed with nobody CONFIRMING what the
 # ledger holds; a hook-written pointer confirms nothing. A retro-sourced entry
 # does not confirm either, and for a stronger reason: the retro fires on exactly
-# the model-free links, unconditionally, and it is forbidden to write CLOSE — so
-# it can never establish that an open item still stands. Both are excluded from
-# `lastwrite`, and so is a `hook` row: the --new: CHARTER is the owner's typed
+# the model-free links, unconditionally, and it is forbidden to write CLOSE or
+# CHARTER — so it can never establish that an open item still stands. Both are
+# excluded from `lastwrite`, and so is a `hook` row: the --new: CHARTER is the owner's typed
 # text, which no session confirmed either. Counting it would pin
 # `lastwrite` to the latest link on every bare handoff and silence the staleness
 # warning permanently — the entry announcing that no model was involved would be

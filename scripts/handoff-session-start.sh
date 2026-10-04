@@ -333,6 +333,8 @@ shq() {
 # applied one ordinal late is worse than an item lost; that is backwards for a
 # mechanism whose entire purpose is that items are not lost, and it made the
 # ledger the one artifact discarded on a failure that preserves everything else.
+# A `--new:` start is the exception: its delta file, which holds the CHARTER it
+# just wrote, is removed after the gate whatever happened (the NEWCHAIN rm below).
 DELTA_FILE="${HOME}/.claude/tmp/handoff-ledger-${WRAPPER_ID}"
 
 # A delta older than the wrapper process was not written under it: the file is
